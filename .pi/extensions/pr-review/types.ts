@@ -16,6 +16,7 @@ export type ReviewLaneId =
   | "docs"
   | "architecture"
   | "code-quality"
+  | "dedupe"
   | "data"
   | "performance"
   | "ux"
@@ -207,6 +208,18 @@ export interface NewLaneProposal {
   evidenceCommentIds: string[];
 }
 
+export interface DesignRuleProposal {
+  ruleId: string;
+  title: string;
+  antipattern: string;
+  suggestion: string;
+  severity: "error" | "warning";
+  category: string;
+  implementation: "design-rule" | "eslint-rule";
+  targetPath: string;
+  evidenceCommentIds: string[];
+}
+
 export interface AfterReviewAnalysisResult {
   prNumber: number;
   analyzedAt: string;
@@ -215,11 +228,12 @@ export interface AfterReviewAnalysisResult {
   analyses: AfterReviewCommentAnalysis[];
   laneImprovements: ReviewLaneImprovementSuggestion[];
   newLaneProposals: NewLaneProposal[];
+  designRuleProposals: DesignRuleProposal[];
   policyHints: PolicyHint[];
 }
 
 export interface PolicyHint {
-  pattern: "never" | "always" | "prevent" | "must" | "should";
+  pattern: "NEVER" | "ALWAYS" | "ANTIPATTERN";
   rawText: string;
   commentId: string;
   confidence: number;

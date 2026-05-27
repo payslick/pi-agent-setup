@@ -1,4 +1,5 @@
 import type { DiffHunk, PRFile, PRMetadata, ReviewLaneId, ReviewLanePacket } from "./types";
+import { designRulesPrompt } from "../../design-rules/index";
 
 interface LaneDefinition {
   laneId: ReviewLaneId;
@@ -48,6 +49,13 @@ const LANE_REVIEW_SKILL_POINTS: Record<string, readonly string[]> = {
   "code-quality": [
     "Flag AI-generated anti-patterns: no-op wrappers, one-use abstractions, speculative flags, redundant state, excessive memoization, over-defensive checks, and dead code.",
     "Check missed reuse of existing utilities/components, duplicated validation/schema/types, broad types, non-null assertions, long functions, and misleading names.",
+    "Flag inline TSX/JSX control-flow tricks such as IIFEs in render expressions and if-else-if chains for value/action dispatch; ask for named helper functions or small components with guard-clause returns.",
+  ],
+  dedupe: [
+    "Use project_index_search when tools are enabled: query changed function/component/hook/schema names, distinctive literals, validation/query logic, and file-purpose phrases to find similar or identical code.",
+    "Compare changed code with candidates from both this PR and the existing codebase; flag duplicated helpers, components, hooks, schemas, tests, copy-pasted branches, and missed shared utilities.",
+    "Suggest the smallest concrete reuse path: import/use an existing abstraction, consolidate identical PR code, or extract a shared helper only when at least two call sites benefit. Name the target file/function.",
+    "Do not report mere stylistic similarity; require substantial identical behavior or a clear existing abstraction that fits.",
   ],
   architecture: [
     "Check misplaced domain logic, coupling, responsibility boundaries, over-engineering, schema/type drift across DB/API/UI, and whether a simpler existing pattern fits.",
@@ -121,6 +129,13 @@ const laneDefinitions: LaneDefinition[] = [
     score: () => 55,
   },
   {
+    laneId: "dedupe",
+    title: "Dedupe / reuse",
+    focus:
+      "Maximize reuse of both new and existing code. Use project_index_search to find similar or identical helpers, components, hooks, schemas, tests, and business logic, then suggest using them or refactoring the changed code toward shared abstractions when the reuse path is concrete.",
+    score: ({ files }) => (files.some((file) => isDedupeCandidatePath(file.path)) ? 58 : 0),
+  },
+  {
     laneId: "data",
     title: "Data & types",
     focus:
@@ -175,11 +190,21 @@ export function routeReviewLanes(
   return laneDefinitions
     .map((definition) => ({
       definition,
-      score: requested ? (requested.has(definition.laneId) ? 100 : 0) : definition.score(input),
+      score: scoreLane(definition, input, requested),
     }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score)
     .map(({ definition }) => buildLanePacket(input, definition));
+}
+
+function scoreLane(
+  definition: LaneDefinition,
+  input: RouteReviewLanesInput,
+  requested: Set<string> | undefined,
+): number {
+  if (!requested) return definition.score(input);
+  if (requested.has(definition.laneId)) return 100;
+  return 0;
 }
 
 function buildLanePacket(
@@ -227,9 +252,23 @@ function laneFileMatcher(laneId: ReviewLaneId): ((filePath: string) => boolean) 
     case "performance":
       return (filePath) =>
         /query|db|sql|table|list|render|cache|import|export|\.tsx$/i.test(filePath);
+    case "dedupe":
+      return isDedupeCandidatePath;
     default:
       return undefined;
   }
+}
+
+function isDedupeCandidatePath(filePath: string): boolean {
+  if (
+    /(^|\/)(docs|documentation)(\/|$)|readme|\.mdx?$|lock$|package-lock|pnpm-lock|yarn\.lock|bun\.lock/i.test(
+      filePath,
+    )
+  )
+    return false;
+  return /(^|\/)(src|app|pages|components|server|api|lib|utils|hooks|tests?|features|packages)(\/|$)|\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i.test(
+    filePath,
+  );
 }
 
 export interface LaneReviewPromptArtifacts {
@@ -261,6 +300,7 @@ export function buildLaneReviewPrompt(
     "## Review rules",
     ...CORE_REVIEW_SKILL_POINTS.map((rule) => `- ${rule}`),
     ...laneSkillPoints(packet.laneId).map((rule) => `- ${rule}`),
+    designRulesPrompt(),
     "- Return only concrete, actionable findings backed by the diff below.",
     "- Do not ask for broad rewrites; keep suggestions scoped to the changed code.",
     "- Avoid duplicate findings; if one root cause affects multiple lines, report the best representative line.",
@@ -279,19 +319,26 @@ export function buildLaneReviewPrompt(
       : ["No shared artifact directory was provided."]),
     "",
     "## Tool boundaries",
-    "- You may use read/read-many-files-lines for local files, web_* for internet research, and project_index_* for codebase lookup.",
-    "- Bash is not available; do not ask for it.",
+    "- Tools may be disabled by the caller; if so, review only the prompt content and never emit tool calls.",
+    "- If tools are enabled, you may use read/read-many-files-lines for local files, web_* for internet research, and project_index_* for codebase lookup.",
+    ...(packet.laneId === "dedupe"
+      ? [
+          "- For dedupe lane, use project_index_search to find similar or identical code before reporting reuse findings; then read candidate files and cite the candidate path/function in the finding body.",
+        ]
+      : []),
+    "- Bash is not available; do not ask for it or emit bash tool calls.",
     artifacts
-      ? `- If you edit files, edit only files under ${artifacts.laneDir} or ${artifacts.sharedDir}.`
-      : "- If you edit files, edit only your review artifact directory or shared review directory.",
+      ? `- If edit tools are enabled, edit only files under ${artifacts.laneDir} or ${artifacts.sharedDir}.`
+      : "- If edit tools are enabled, edit only your review artifact directory or shared review directory.",
     "",
     "## Changed files",
     ...packet.files.map((file) => `- ${file.path} (${file.status})`),
     "",
     "## Diff hunks",
     artifacts
-      ? `Diff hunks are stored in ${artifacts.laneDir}/hunks.json. Use the shared patch at ${artifacts.sharedDir}/patch.diff if you need full context.`
-      : formatHunks(packet.hunks),
+      ? `Diff hunks are also stored in ${artifacts.laneDir}/hunks.json. The shared patch is at ${artifacts.sharedDir}/patch.diff if tools are enabled.`
+      : "Inline diff hunks follow.",
+    formatHunks(packet.hunks),
     "",
     "Return JSON only with this shape:",
     '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"functionName":"name","title":"one line","body":"rationale","confidence":0.8,"suggestion":"fix"}]}',
@@ -306,6 +353,12 @@ function laneSkillPoints(laneId: ReviewLaneId): readonly string[] {
   return fuzzy?.[1] ?? [];
 }
 
+function diffLinePrefix(kind: DiffHunk["lines"][number]["kind"]): string {
+  if (kind === "add") return "+";
+  if (kind === "delete") return "-";
+  return " ";
+}
+
 function formatHunks(hunks: readonly DiffHunk[]): string {
   if (!hunks.length) return "No hunks available.";
   const displayedHunks = hunks.slice(0, HUNK_LIMIT);
@@ -316,7 +369,7 @@ function formatHunks(hunks: readonly DiffHunk[]): string {
         .slice(0, HUNK_LINE_LIMIT)
         .map((line) => {
           if (line.kind === "hunk") return line.content;
-          const prefix = line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ";
+          const prefix = diffLinePrefix(line.kind);
           const number = line.kind === "delete" ? line.oldLineNumber : line.newLineNumber;
           return `${prefix}${number ?? ""}: ${line.content}`;
         })

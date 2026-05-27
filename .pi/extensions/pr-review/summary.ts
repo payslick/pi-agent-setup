@@ -454,6 +454,7 @@ export function laneIcon(laneId: string): string {
     return "📝";
   if (normalized.includes("correct")) return "🐛";
   if (normalized.includes("architecture")) return "🏗️";
+  if (normalized.includes("dedupe") || normalized.includes("reuse")) return "♻️";
   if (normalized.includes("quality")) return "🧹";
   if (normalized.includes("data") || normalized.includes("type")) return "🗄️";
   if (normalized.includes("performance")) return "⚡";

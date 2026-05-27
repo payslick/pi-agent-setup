@@ -30,6 +30,24 @@ describe("pr review lanes", () => {
     expect(relevanceLane?.focus).toContain("always report unrelated");
   });
 
+  test("routes dedupe lane and asks it to search for reusable code", () => {
+    const lanes = routeReviewLanes({ pr, files: packet.files, hunks: [] });
+    const dedupeLane = lanes.find((lane) => lane.laneId === "dedupe");
+
+    expect(dedupeLane).toBeDefined();
+    expect(dedupeLane?.focus).toContain("project_index_search");
+
+    const prompt = buildLaneReviewPrompt(pr, {
+      ...packet,
+      laneId: "dedupe",
+      title: dedupeLane?.title ?? "Dedupe / reuse",
+      focus: dedupeLane?.focus ?? "",
+    });
+
+    expect(prompt).toContain("project_index_search");
+    expect(prompt).toContain("similar or identical code");
+  });
+
   test("includes PR body in lane prompts", () => {
     const prompt = buildLaneReviewPrompt(pr, packet);
 

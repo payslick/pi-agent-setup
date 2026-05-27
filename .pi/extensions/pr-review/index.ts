@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 // @ts-ignore Runtime-provided Pi package may be resolved only by the Pi runtime.
 import { getMarkdownTheme as runtimeGetMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -18,6 +18,7 @@ import type { VisualReviewRunDetails } from "./visual";
 import { renderVisualReviewReport } from "./visual";
 import type {
   AfterReviewAnalysisResult,
+  DesignRuleProposal,
   ExecutiveSummaryInput,
   IssueConsolidation,
   NewLaneProposal,
@@ -132,21 +133,41 @@ const REVIEW_AGENT_ALLOWED_TOOLS = [
   "project_index_impact",
   "edit",
 ].join(",");
+const DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS = [
+  "read",
+  "read-many-files-lines",
+  "project_index_status",
+  "project_index_refresh",
+  "project_index_search",
+].join(",");
 const REVIEW_AGENT_TIMEOUT_MS = Number(process.env.PI_REVIEW_AGENT_TIMEOUT_MS ?? 300_000);
 const REVIEW_AGENT_REPAIR_TIMEOUT_MS = Number(
   process.env.PI_REVIEW_AGENT_REPAIR_TIMEOUT_MS ?? 60_000,
 );
 const REVIEW_AGENT_DISABLE_REPAIR = process.env.PI_REVIEW_DISABLE_REPAIR === "1";
+const REVIEW_AGENT_ENABLE_TOOLS = process.env.PI_REVIEW_AGENT_ENABLE_TOOLS === "1";
 const REVIEW_AGENT_MODEL = process.env.PI_REVIEW_AGENT_MODEL;
-const REVIEW_AGENT_SYSTEM_PROMPT = [
+const REVIEW_AGENT_SYSTEM_PROMPT_WITH_TOOLS = [
   "You are a focused PR review lane agent.",
-  "Use only the enabled tools. Bash is intentionally unavailable.",
+  "Use only the enabled tools. Bash is intentionally unavailable. When calling tools, pass arguments as JSON objects, never as stringified JSON.",
   "If you edit files, edit only your lane directory or the shared review directory.",
   "Return JSON only, with this shape:",
   '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"functionName":"name","title":"one line","body":"rationale","confidence":0.8,"suggestion":"fix"}]}',
   "Use an empty findings array if there are no issues.",
   "Do not include markdown fences or prose outside JSON.",
 ].join("\n");
+const REVIEW_AGENT_SYSTEM_PROMPT_NO_TOOLS = [
+  "You are a focused PR review lane agent.",
+  "Tools are intentionally disabled. Review only the prompt content and return JSON; do not emit tool calls.",
+  "If you edit files, edit only your lane directory or the shared review directory.",
+  "Return JSON only, with this shape:",
+  '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"functionName":"name","title":"one line","body":"rationale","confidence":0.8,"suggestion":"fix"}]}',
+  "Use an empty findings array if there are no issues.",
+  "Do not include markdown fences or prose outside JSON.",
+].join("\n");
+const REVIEW_AGENT_SYSTEM_PROMPT = REVIEW_AGENT_ENABLE_TOOLS
+  ? REVIEW_AGENT_SYSTEM_PROMPT_WITH_TOOLS
+  : REVIEW_AGENT_SYSTEM_PROMPT_NO_TOOLS;
 const REVIEW_AFTER_AGENT_TIMEOUT_MS = Number(
   process.env.PI_REVIEW_AFTER_AGENT_TIMEOUT_MS ?? 180_000,
 );
@@ -155,6 +176,7 @@ const REVIEW_AFTER_AGENT_SYSTEM_PROMPT = [
   "You receive human reviewer comments after the initial review pass.",
   "For each comment: explain the issue briefly and suggest a practical fix.",
   "Identify lane improvements only when confidence is high and the improvement is actionable.",
+  "Only treat all-caps NEVER, ALWAYS, and ANTIPATTERN as policy-pattern markers; ignore lowercase or mixed-case variants.",
   "Propose a new lane only when repeated comments reveal a clear missing review capability.",
   "Return JSON only with this shape:",
   '{"analyses":[{"commentId":"id","priority":"action_required|suggestion|informational|nit","theme":"short theme","summary":"what reviewer means","suggestedSolution":"practical fix","confidence":0.0}],"laneImprovements":[{"laneId":"existing-lane-id","currentRule":"optional current rule","proposedImprovement":"specific rule addition","rationale":"why this will catch future issues","affectedCommentIds":["id"]}],"newLaneProposals":[{"proposedLaneId":"kebab-id","title":"Lane title","focus":"what the lane checks","relevantPattern":"repeating pattern","rationale":"why this lane is justified","evidenceCommentIds":["id"]}]}',
@@ -170,6 +192,7 @@ const KNOWN_REVIEW_LANES = [
   "docs",
   "architecture",
   "code-quality",
+  "dedupe",
   "data",
   "performance",
   "ux",
@@ -1213,6 +1236,43 @@ async function readProjectTextFile(
   return readFile(absolutePath, "utf8");
 }
 
+async function formatProjectFilesForPrompt(
+  ctx: ExtensionCommandContext,
+  filePaths: readonly string[],
+  maxLength: number,
+): Promise<string> {
+  const sections: string[] = [];
+  for (const filePath of filePaths) {
+    const content = await readProjectTextFile(ctx, filePath).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return `<<failed to read: ${message}>>`;
+    });
+    sections.push([`### ${filePath}`, "```", content, "```"].join("\n"));
+  }
+  return truncateForPrompt(sections.join("\n\n"), maxLength);
+}
+
+async function applyAgentFileWrites(
+  ctx: ExtensionCommandContext,
+  parsed: Record<string, unknown> | undefined,
+  allowPath: (filePath: string) => boolean = () => true,
+): Promise<string[]> {
+  const files = Array.isArray(parsed?.files) ? parsed.files : [];
+  const written: string[] = [];
+  for (const file of files) {
+    if (!isRecord(file)) continue;
+    const filePath = stringValue(file.path);
+    const content = typeof file.content === "string" ? file.content : undefined;
+    if (!filePath || content === undefined || !allowPath(filePath)) continue;
+    const absolutePath = path.resolve(ctx.cwd, filePath);
+    const relativeCheck = path.relative(ctx.cwd, absolutePath);
+    if (relativeCheck.startsWith("..") || path.isAbsolute(relativeCheck)) continue;
+    await writeFile(absolutePath, content, "utf8");
+    written.push(relativePath(ctx.cwd, absolutePath));
+  }
+  return written;
+}
+
 async function runPrCreateScreenshotAgent(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
@@ -1220,10 +1280,11 @@ async function runPrCreateScreenshotAgent(
   uiFiles: readonly string[],
 ): Promise<{ markdown: string; failures: string[] }> {
   const prompt = [
-    "Capture screenshots for UI changes before PR creation.",
-    "Read skills/skills/pr/visual.md for the workflow.",
+    "Plan screenshots for UI changes before PR creation.",
+    "Read skills/skills/pr/visual.md for screenshot requirements and selector guidance.",
+    "Do not call bash or run screenshot commands; bash is intentionally unavailable. Return the screenshot commands a human or caller should run.",
     "Return JSON only with this shape:",
-    '{"markdown":"### Page\\n![description](github-url)","failures":["failure reason"]}',
+    '{"markdown":"### Page\\n![description](github-url)","failures":["failure reason or required screenshot command"]}',
     "Use an empty failures array on success. Do not silently skip failures.",
     "",
     "## Changed UI files",
@@ -1242,14 +1303,13 @@ async function runPrCreateScreenshotAgent(
     ...(REVIEW_AGENT_MODEL ? ["--model", REVIEW_AGENT_MODEL] : []),
     "--thinking",
     "off",
-    "--tools",
-    "read,read-many-files-lines,bash",
+    "--no-tools",
     "--no-extensions",
     "--no-prompt-templates",
     "--no-context-files",
     "--no-session",
     "--system-prompt",
-    "You are a focused screenshot capture agent for PR creation. Use the provided repository scripts and return JSON only.",
+    "You are a focused screenshot planning agent for PR creation. Bash is unavailable; return JSON only.",
     prompt,
   ];
   const result = await pi.exec(process.env.PI_REVIEW_PI_BIN || "pi", args, {
@@ -1806,19 +1866,22 @@ async function runPrUpdateConflictAgent(
 ): Promise<void> {
   const model =
     REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+  const fileContents = await formatProjectFilesForPrompt(ctx, conflictedFiles, 120_000);
   const prompt = [
     `Resolve git rebase conflicts for PR #${prNumber}.`,
     `Base branch: origin/${baseBranch}`,
+    "Tools are disabled. Return the complete resolved file contents as JSON; the caller will write them.",
     "Rules:",
     "- Never force-push.",
     "- Do not run git rebase --continue; the caller will do that.",
-    "- Edit only files with conflict markers unless a direct import/type fallout is required to make the conflict resolution coherent.",
+    "- Resolve only files with conflict markers unless a direct import/type fallout is required to make the conflict resolution coherent.",
     "- Preserve the PR intent while incorporating upstream changes from the base branch.",
+    "- The returned content must not contain conflict markers.",
+    "Return JSON only with this shape:",
+    '{"files":[{"path":"file.ts","content":"complete resolved file content"}],"summary":"what changed"}',
     "",
-    "Conflicted files:",
-    ...conflictedFiles.map((file) => `- ${file}`),
-    "",
-    "After editing, return a concise plain-text summary.",
+    "## Conflicted files",
+    fileContents,
   ].join("\n");
   await writePrUpdateArtifact(ctx, "conflict-agent-prompt.md", prompt);
   const args = [
@@ -1828,15 +1891,14 @@ async function runPrUpdateConflictAgent(
     ...(model ? ["--model", model] : []),
     "--thinking",
     "off",
-    "--tools",
-    "read,read-many-files-lines,edit,bash",
+    "--no-tools",
     "--no-extensions",
     "--no-skills",
     "--no-prompt-templates",
     "--no-context-files",
     "--no-session",
     "--system-prompt",
-    "You are a careful rebase-conflict resolver. Resolve conflict markers only; never force-push.",
+    "You are a careful rebase-conflict resolver. Tools are disabled; return JSON only and never emit tool calls.",
     prompt,
   ];
   const result = await pi.exec(process.env.PI_REVIEW_PI_BIN || "pi", args, {
@@ -1850,6 +1912,8 @@ async function runPrUpdateConflictAgent(
     throw new Error(
       result.stderr.trim() || result.stdout.trim() || `conflict agent exited ${result.code}`,
     );
+  const written = await applyAgentFileWrites(ctx, parseJsonObjectFromOutput(result.stdout));
+  if (!written.length) throw new Error("Conflict resolver did not return any file contents.");
 }
 
 async function fixPrUpdateStaleDocs(
@@ -1862,14 +1926,23 @@ async function fixPrUpdateStaleDocs(
   if (!docsValidity.length) return false;
   const model =
     REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+  const docFiles = [...new Set(docsValidity.map((item) => item.docFile))];
+  const fileContents = await formatProjectFilesForPrompt(ctx, docFiles, 80_000);
   const prompt = [
     `Fix stale documentation references for PR #${prNumber}.`,
-    "Only edit README.md and files under docs/.",
+    "Tools are disabled. Return complete updated documentation files as JSON; the caller will write them.",
+    "Only update README.md and files under docs/.",
     "Remove or update stale file paths, renamed commands, or changed config keys. Preserve unrelated wording.",
-    "Stale references:",
+    "Return JSON only with this shape:",
+    '{"files":[{"path":"README.md","content":"complete updated file content"}],"summary":"what changed"}',
+    "",
+    "## Stale references",
     ...docsValidity.map(
       (item) => `- ${item.docFile}:${item.lineNumber} references ${item.reference}`,
     ),
+    "",
+    "## Current documentation files",
+    fileContents,
   ].join("\n");
   await writePrUpdateArtifact(ctx, "docs-fix-prompt.md", prompt);
   const result = await pi.exec(
@@ -1881,15 +1954,14 @@ async function fixPrUpdateStaleDocs(
       ...(model ? ["--model", model] : []),
       "--thinking",
       "off",
-      "--tools",
-      "read,read-many-files-lines,edit",
+      "--no-tools",
       "--no-extensions",
       "--no-skills",
       "--no-prompt-templates",
       "--no-context-files",
       "--no-session",
       "--system-prompt",
-      "You fix only stale documentation references. Return a concise summary.",
+      "You fix only stale documentation references. Tools are disabled; return JSON only and never emit tool calls.",
       prompt,
     ],
     { cwd: ctx.cwd, signal: ctx.signal, timeout: 180_000 },
@@ -1900,6 +1972,11 @@ async function fixPrUpdateStaleDocs(
     throw new Error(
       result.stderr.trim() || result.stdout.trim() || `docs fix agent exited ${result.code}`,
     );
+  await applyAgentFileWrites(
+    ctx,
+    parseJsonObjectFromOutput(result.stdout),
+    (filePath) => filePath === "README.md" || filePath.startsWith("docs/"),
+  );
   const changedDocs = await getPrUpdateChangedDocs(pi, ctx);
   if (!changedDocs.length) return false;
   await execRequired(pi, ctx, "git", ["add", "README.md", "docs/"], "git add docs", 60_000);
@@ -2261,13 +2338,14 @@ async function runReviewAfterCommand(
   }
 
   const policyHints = extractPolicyHints(comments);
-  const agentOutput = await runReviewAfterAgent(pi, ctx, prData.metadata, comments).catch(
-    (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      if (ctx.hasUI) ctx.ui.notify(`pr-review-process agent failed: ${message}`, "warning");
-      return undefined;
-    },
-  );
+  const preferEslintRules = await hasDevEslintDirectory(ctx.cwd);
+  const agentOutput = await runReviewAfterAgent(pi, ctx, prData.metadata, comments, {
+    preferEslintRules,
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (ctx.hasUI) ctx.ui.notify(`pr-review-process agent failed: ${message}`, "warning");
+    return undefined;
+  });
 
   const analyses = normalizeAfterReviewCommentAnalyses(
     agentOutput?.analyses,
@@ -2275,13 +2353,18 @@ async function runReviewAfterCommand(
     policyHints,
   );
   const laneImprovements = mergeLaneImprovements(
-    normalizeLaneImprovements(agentOutput?.laneImprovements),
-    inferLaneImprovementsFromPolicyHints(policyHints),
+    filterLaneImprovementsForEslintPreference(
+      normalizeLaneImprovements(agentOutput?.laneImprovements),
+      policyHints,
+      preferEslintRules,
+    ),
+    inferLaneImprovementsFromPolicyHints(policyHints, { preferEslintRules }),
   );
   const newLaneProposals = mergeNewLaneProposals(
     normalizeNewLaneProposals(agentOutput?.newLaneProposals),
     inferNewLaneProposals(policyHints),
   );
+  const designRuleProposals = inferDesignRuleProposals(policyHints, { preferEslintRules });
 
   const result: AfterReviewAnalysisResult = {
     prNumber,
@@ -2291,6 +2374,7 @@ async function runReviewAfterCommand(
     analyses,
     laneImprovements,
     newLaneProposals,
+    designRuleProposals,
     policyHints,
   };
 
@@ -2301,6 +2385,7 @@ async function runReviewAfterCommand(
     `Post-review #${prNumber}: ${result.commentsAnalyzed} comments analyzed.`,
     `Policy-style comments: ${result.policyHints.length}.`,
     `Lane improvements: ${result.laneImprovements.length}. New lane ideas: ${result.newLaneProposals.length}.`,
+    `Design rule proposals: ${result.designRuleProposals.length}.`,
   ]);
 }
 
@@ -2319,6 +2404,7 @@ async function runReviewAfterAgent(
   ctx: ExtensionCommandContext,
   pr: PRMetadata,
   comments: readonly ReviewComment[],
+  options: PolicyInferenceOptions,
 ): Promise<Record<string, unknown>> {
   const model =
     REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
@@ -2330,6 +2416,11 @@ async function runReviewAfterAgent(
     "",
     "## Current review lanes",
     ...KNOWN_REVIEW_LANES.map((lane) => `- ${lane}`),
+    "",
+    "## Enforcement preference",
+    options.preferEslintRules
+      ? "This project has `dev/eslint/`; for policy-style comments that can be checked syntactically, prefer suggesting a simple ESLint rule instead of a review lane change."
+      : "This project does not have `dev/eslint/`; use design-rule or lane suggestions as appropriate.",
     "",
     "## Reviewer comments",
     ...comments.slice(0, 120).map((comment, index) => formatReviewCommentForPrompt(comment, index)),
@@ -2633,15 +2724,9 @@ export function extractPolicyHints(comments: readonly ReviewComment[]): PolicyHi
 function extractPolicyHintsFromBody(commentId: string, body: string): PolicyHint[] {
   const definitions: Array<{ pattern: PolicyHint["pattern"]; regex: RegExp; confidence: number }> =
     [
-      { pattern: "never", regex: /\bnever\b[^.!?\n]{0,200}/gi, confidence: 0.92 },
-      { pattern: "always", regex: /\balways\b[^.!?\n]{0,200}/gi, confidence: 0.9 },
-      {
-        pattern: "prevent",
-        regex: /\bprevent(?:\s+this)?\s+behavio[u]?r\b[^.!?\n]{0,200}/gi,
-        confidence: 0.9,
-      },
-      { pattern: "must", regex: /\bmust\b[^.!?\n]{0,200}/gi, confidence: 0.8 },
-      { pattern: "should", regex: /\bshould\b[^.!?\n]{0,200}/gi, confidence: 0.68 },
+      { pattern: "NEVER", regex: /\bNEVER\b[^.!?\n]{0,200}/g, confidence: 0.92 },
+      { pattern: "ALWAYS", regex: /\bALWAYS\b[^.!?\n]{0,200}/g, confidence: 0.9 },
+      { pattern: "ANTIPATTERN", regex: /\bANTIPATTERN\b[^.!?\n]{0,200}/g, confidence: 0.88 },
     ];
 
   const hints: PolicyHint[] = [];
@@ -2660,8 +2745,13 @@ function extractPolicyHintsFromBody(commentId: string, body: string): PolicyHint
   return hints;
 }
 
+interface PolicyInferenceOptions {
+  preferEslintRules?: boolean;
+}
+
 export function inferLaneImprovementsFromPolicyHints(
   policyHints: readonly PolicyHint[],
+  options: PolicyInferenceOptions = {},
 ): ReviewLaneImprovementSuggestion[] {
   const byLane = new Map<string, { hints: PolicyHint[]; rationale: string; improvement: string }>();
 
@@ -2682,6 +2772,7 @@ export function inferLaneImprovementsFromPolicyHints(
   for (const hint of policyHints) {
     if (hint.confidence < 0.8) continue;
     const text = hint.rawText;
+    if (options.preferEslintRules && isLikelyEslintRuleCandidate(text)) continue;
     if (/(schema|db|drizzle|type|zod|null|optional|constraint|migration)/i.test(text)) {
       add(
         "data",
@@ -2722,7 +2813,20 @@ export function inferLaneImprovementsFromPolicyHints(
       );
       continue;
     }
-    if (/(name|naming|duplicate|refactor|readability|dead code|complex)/i.test(text)) {
+    if (
+      /(duplicate|duplicated|copy[-\s]?paste|reuse|reusable|shared\s+(helper|util|component)|existing\s+(helper|util|component)|refactor)/i.test(
+        text,
+      )
+    ) {
+      add(
+        "dedupe",
+        hint,
+        "Add a dedupe-lane rule to search project_index_search for similar or identical code before recommending reuse or extraction.",
+        "Policy comments point to recurring missed code reuse opportunities.",
+      );
+      continue;
+    }
+    if (/(name|naming|readability|dead code|complex)/i.test(text)) {
       add(
         "code-quality",
         hint,
@@ -2743,11 +2847,8 @@ export function inferLaneImprovementsFromPolicyHints(
 }
 
 export function inferNewLaneProposals(policyHints: readonly PolicyHint[]): NewLaneProposal[] {
-  const regressionHints = policyHints.filter(
-    (hint) =>
-      hint.confidence >= 0.85 && /(prevent|never|always|regression|repeat)/i.test(hint.rawText),
-  );
-  const uniqueCommentIds = [...new Set(regressionHints.map((hint) => hint.commentId))];
+  const policyPatternHints = policyHints.filter((hint) => hint.confidence >= 0.85);
+  const uniqueCommentIds = [...new Set(policyPatternHints.map((hint) => hint.commentId))];
   if (uniqueCommentIds.length < 3) return [];
 
   return [
@@ -2757,12 +2858,39 @@ export function inferNewLaneProposals(policyHints: readonly PolicyHint[]): NewLa
       focus:
         "Detect repeated reviewer concerns that ask to prevent recurring behavior and require explicit guardrails (tests, schema constraints, or runtime checks).",
       relevantPattern:
-        "Reviewer comments repeatedly use policy language such as never/always/prevent behavior.",
+        "Reviewer comments repeatedly use all-caps policy markers such as NEVER/ALWAYS/ANTIPATTERN.",
       rationale:
         "Multiple independent comments indicate recurrence-prevention expectations that are not consistently captured by existing lanes.",
       evidenceCommentIds: uniqueCommentIds,
     },
   ];
+}
+
+function filterLaneImprovementsForEslintPreference(
+  improvements: readonly ReviewLaneImprovementSuggestion[],
+  policyHints: readonly PolicyHint[],
+  preferEslintRules: boolean,
+): ReviewLaneImprovementSuggestion[] {
+  if (!preferEslintRules) return [...improvements];
+
+  const eslintCandidateCommentIds = new Set(
+    policyHints
+      .filter((hint) => isLikelyEslintRuleCandidate(hint.rawText))
+      .map((hint) => hint.commentId),
+  );
+
+  return improvements.filter((improvement) => {
+    if (improvement.laneId !== "code-quality" && improvement.laneId !== "dedupe") return true;
+    return !improvement.affectedCommentIds.some((commentId) =>
+      eslintCandidateCommentIds.has(commentId),
+    );
+  });
+}
+
+function isLikelyEslintRuleCandidate(text: string): boolean {
+  return /(if[-\s]?else|else\s+if|function|component|hook|jsx|tsx|ts|js|import|export|literal|ternary|promise|async|await|array|object|prop|props|variable|const|let|class|method|callback|useEffect|useMemo|useCallback)/i.test(
+    text,
+  );
 }
 
 function mergeLaneImprovements(
@@ -2837,7 +2965,7 @@ function renderAfterReviewReport(
   if (analysis.policyHints.length) {
     lines.push(
       "",
-      "### Policy-pattern comments (never / always / prevent / must / should)",
+      "### Policy-pattern comments (NEVER / ALWAYS / ANTIPATTERN)",
       "",
       "| Pattern | Comment ID | Excerpt |",
       "|---|---|---|",
@@ -2881,7 +3009,29 @@ function renderAfterReviewReport(
     }
   }
 
+  if (analysis.designRuleProposals.length) {
+    lines.push("", "### Design rule proposals from PR comments", "");
+    lines.push(
+      "These patterns from NEVER/ALWAYS/ANTIPATTERN comments can become enforceable rules. When `dev/eslint/` exists, prefer a simple ESLint rule over a lane change or `.pi/design-rules/` rule.",
+      "",
+      "| Rule ID | Title | Implementation | Target path | Severity | Evidence |",
+      "|---|---|---|---|---|---|",
+      ...analysis.designRuleProposals.map(
+        (proposal) =>
+          `| ${escapePipeCell(proposal.ruleId)} | ${escapePipeCell(proposal.title)} | ${escapePipeCell(proposal.implementation)} | ${escapePipeCell(proposal.targetPath)} | ${escapePipeCell(proposal.severity)} | ${escapePipeCell(proposal.evidenceCommentIds.join(", ") || "—")} |`,
+      ),
+    );
+  }
+
   return lines.join("\n");
+}
+
+async function hasDevEslintDirectory(root: string): Promise<boolean> {
+  try {
+    return (await stat(path.join(root, "dev", "eslint"))).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function escapePipeCell(value: string): string {
@@ -2904,41 +3054,15 @@ async function runCiWatcher(
   }
 
   const expectedWorkflows = await discoverGithubWorkflowNames(ctx.cwd);
-  const prompt = [
-    `Watch CI for PR #${prNumber}.`,
-    "Use the GitHub CLI only. Run:",
-    `gh pr checks ${prNumber} --json name,state,bucket,link,workflow`,
-    "Return JSON only with this shape:",
-    '{"checks":[{"name":"check","state":"SUCCESS|FAILURE|PENDING|...","bucket":"pass|fail|pending|...","workflow":"workflow name","link":"url"}],"message":"short status"}',
-    `Expected workflow names from .github/workflows: ${expectedWorkflows.join(", ") || "none discovered"}`,
-  ].join("\n");
-  const args = [
-    "--print",
-    "--mode",
-    "text",
-    "--thinking",
-    "off",
-    "--tools",
-    "bash",
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-context-files",
-    "--no-session",
-    "--system-prompt",
-    "You are a low-effort CI watcher. Use gh CLI, then return JSON only.",
-    prompt,
-  ];
-  const result = await pi.exec(process.env.PI_REVIEW_PI_BIN || "pi", args, {
-    cwd: ctx.cwd,
-    signal: ctx.signal,
-    timeout: 60_000,
-  });
+  const result = await pi.exec(
+    "gh",
+    ["pr", "checks", String(prNumber), "--json", "name,state,bucket,link,workflow"],
+    { cwd: ctx.cwd, signal: ctx.signal, timeout: 60_000 },
+  );
   await writeSharedArtifact(ctx, "ci-watcher-stdout.txt", result.stdout);
   await writeSharedArtifact(ctx, "ci-watcher-stderr.txt", result.stderr);
 
-  const checks =
-    parseCiWatcherChecks(result.stdout) ?? (await fetchCiChecksDirect(pi, ctx, prNumber));
+  const checks = parseCiChecksOutput(result.stdout);
   const missingWorkflows = expectedWorkflows.filter(
     (workflow) =>
       !checks.some((check) => check.workflow === workflow || check.name.includes(workflow)),
@@ -2957,31 +3081,12 @@ async function runCiWatcher(
   return ciStatus;
 }
 
-async function fetchCiChecksDirect(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  prNumber: number,
-): Promise<ReviewCiCheck[]> {
-  const result = await pi.exec(
-    "gh",
-    ["pr", "checks", String(prNumber), "--json", "name,state,bucket,link,workflow"],
-    { cwd: ctx.cwd, signal: ctx.signal, timeout: 30_000 },
-  );
-  if (result.code !== 0 && !result.stdout.trim()) return [];
+function parseCiChecksOutput(stdout: string): ReviewCiCheck[] {
   try {
-    const parsed = JSON.parse(result.stdout.trim()) as unknown;
+    const parsed = JSON.parse(stdout.trim()) as unknown;
     return Array.isArray(parsed) ? parsed.flatMap(normalizeCiCheck) : [];
   } catch {
     return [];
-  }
-}
-
-function parseCiWatcherChecks(stdout: string): ReviewCiCheck[] | undefined {
-  try {
-    const parsed = parseAgentJson(stdout) as { checks?: unknown };
-    return Array.isArray(parsed.checks) ? parsed.checks.flatMap(normalizeCiCheck) : undefined;
-  } catch {
-    return undefined;
   }
 }
 
@@ -3147,12 +3252,7 @@ function buildReviewSkillCoverage(input: {
         ? "Lane agents receive parsed diff hunks; full changed-file snapshots are not yet attached."
         : "No diff hunk data available.",
     },
-    {
-      id: "utils-index",
-      label: "Existing utils/hooks/components index",
-      status: "missing",
-      details: "Not yet built automatically for lane prompts.",
-    },
+    laneCoverageItem("dedupe", "Dedupe/reuse search", laneSet, successfulLaneSet, input.noAgents),
     laneCoverageItem("api-safety", "API safety agent", laneSet, successfulLaneSet, input.noAgents),
     laneCoverageItem(
       "code-quality",
@@ -3390,10 +3490,14 @@ async function runCiAnalysisLaneAgent(
     ...(model ? ["--model", model] : []),
     "--thinking",
     "off",
-    "--tools",
-    REVIEW_AGENT_ALLOWED_TOOLS,
-    "--extension",
-    path.join(ctx.cwd, getLaneDir(ctx, laneId), "review-agent-tool-guard.ts"),
+    ...(REVIEW_AGENT_ENABLE_TOOLS
+      ? [
+          "--tools",
+          REVIEW_AGENT_ALLOWED_TOOLS,
+          "--extension",
+          path.join(ctx.cwd, getLaneDir(ctx, laneId), "review-agent-tool-guard.ts"),
+        ]
+      : ["--no-tools"]),
     "--no-skills",
     "--no-prompt-templates",
     "--no-context-files",
@@ -3479,6 +3583,11 @@ async function runLaneAgent(
   const artifactDir = laneAgentArtifactDir(ctx, packet.laneId).relative;
   const model =
     REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+  const laneToolsEnabled = REVIEW_AGENT_ENABLE_TOOLS || packet.laneId === "dedupe";
+  const laneAllowedTools =
+    packet.laneId === "dedupe" && !REVIEW_AGENT_ENABLE_TOOLS
+      ? DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS
+      : REVIEW_AGENT_ALLOWED_TOOLS;
   const args = [
     "--print",
     "--mode",
@@ -3486,16 +3595,20 @@ async function runLaneAgent(
     ...(model ? ["--model", model] : []),
     "--thinking",
     "off",
-    "--tools",
-    REVIEW_AGENT_ALLOWED_TOOLS,
-    "--extension",
-    path.join(ctx.cwd, getLaneDir(ctx, packet.laneId), "review-agent-tool-guard.ts"),
+    ...(laneToolsEnabled
+      ? [
+          "--tools",
+          laneAllowedTools,
+          "--extension",
+          path.join(ctx.cwd, getLaneDir(ctx, packet.laneId), "review-agent-tool-guard.ts"),
+        ]
+      : ["--no-tools"]),
     "--no-skills",
     "--no-prompt-templates",
     "--no-context-files",
     "--no-session",
     "--system-prompt",
-    REVIEW_AGENT_SYSTEM_PROMPT,
+    laneToolsEnabled ? REVIEW_AGENT_SYSTEM_PROMPT_WITH_TOOLS : REVIEW_AGENT_SYSTEM_PROMPT_NO_TOOLS,
     prompt,
   ];
   try {
@@ -3850,7 +3963,13 @@ function normalizeType(value: string | undefined, laneId: ReviewLaneId): ReviewF
   if (laneId.includes("relevance") || laneId.includes("description") || laneId.includes("intent"))
     return "question";
   if (laneId.includes("performance")) return "performance";
-  if (laneId.includes("quality") || laneId.includes("architecture")) return "maintainability";
+  if (
+    laneId.includes("quality") ||
+    laneId.includes("architecture") ||
+    laneId.includes("dedupe") ||
+    laneId.includes("reuse")
+  )
+    return "maintainability";
   return "bug";
 }
 
@@ -4411,6 +4530,52 @@ function demoSummary(): string {
       },
     ],
   });
+}
+
+function inferDesignRuleProposals(
+  policyHints: readonly PolicyHint[],
+  options: PolicyInferenceOptions = {},
+): DesignRuleProposal[] {
+  const ruleProposals: DesignRuleProposal[] = [];
+  const hints = policyHints.filter((hint) => hint.confidence >= 0.8);
+  if (!hints.length) return [];
+
+  // Look for NEVER/ALWAYS/ANTIPATTERN patterns that suggest reusable rules
+  for (const hint of hints) {
+    const text = hint.rawText;
+
+    // Infer a rule description from the hint text
+    if (/(?:\bnever\b|\balways\b)[^.!?\n]{10,200}/i.test(text)) {
+      const baseId = "pr-review-" + stableId(text.slice(0, 60));
+      const ruleId = `review-${baseId}`;
+      const implementation = options.preferEslintRules ? "eslint-rule" : "design-rule";
+      ruleProposals.push({
+        ruleId,
+        title: shortenRuleTitle(text.slice(0, 100)),
+        antipattern: text.slice(0, 200).replace(/\s+/g, " ").trim(),
+        suggestion: `Fix the pattern described above in "${hint.pattern}" comment ${hint.commentId}.`,
+        severity: hint.confidence >= 0.9 ? "error" : "warning",
+        category: implementation === "eslint-rule" ? "eslint" : "lint suggestions from PR review",
+        implementation,
+        targetPath:
+          implementation === "eslint-rule"
+            ? `dev/eslint/rules/${ruleId}.ts`
+            : `.pi/design-rules/${ruleId}.ts`,
+        evidenceCommentIds: [hint.commentId],
+      });
+    }
+  }
+
+  return ruleProposals;
+}
+
+function shortenRuleTitle(text: string): string {
+  const cleaned = text
+    .replace(/^(?:never|always|antipattern)[:，\s]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= 90) return cleaned;
+  return cleaned.slice(0, 87) + "…";
 }
 
 export default function prReviewExtension(pi: ExtensionAPI): void {
