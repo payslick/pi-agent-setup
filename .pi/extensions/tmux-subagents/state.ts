@@ -135,7 +135,8 @@ export function friendlySubagentName(id: string): string {
   const compactId = id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
   const hash = numericHash(compactId || id);
   const adjective = FRIENDLY_ADJECTIVES[hash % FRIENDLY_ADJECTIVES.length];
-  const noun = FRIENDLY_NOUNS[Math.floor(hash / FRIENDLY_ADJECTIVES.length) % FRIENDLY_NOUNS.length];
+  const noun =
+    FRIENDLY_NOUNS[Math.floor(hash / FRIENDLY_ADJECTIVES.length) % FRIENDLY_NOUNS.length];
   const suffix = (compactId || hash.toString(16)).slice(0, 4).padEnd(4, "0");
   return `${adjective}-${noun}-${suffix}`;
 }
@@ -151,7 +152,7 @@ export function shortenHomePath(filePath: string | undefined, homeDir = process.
 export function planSubagentPlacement(
   hasStackTarget: boolean,
   explicitSplit: SplitDirection | undefined,
-  requestedSize: string | undefined
+  requestedSize: string | undefined,
 ): SubagentPlacementPlan {
   const split: SplitDirection = explicitSplit ?? (hasStackTarget ? "below" : "right");
   const target = explicitSplit === "right" || !hasStackTarget ? "main" : "stack";
@@ -159,7 +160,10 @@ export function planSubagentPlacement(
   return size ? { split, target, size } : { split, target };
 }
 
-export function restoreRecordsForWindow(entries: SubagentSessionEntry[], windowId: string): Map<string, SpawnedSubagentRecord> {
+export function restoreRecordsForWindow(
+  entries: SubagentSessionEntry[],
+  windowId: string,
+): Map<string, SpawnedSubagentRecord> {
   const restored = new Map<string, SpawnedSubagentRecord>();
   for (const entry of entries) {
     if (entry.type !== "custom" || entry.customType !== CUSTOM_ENTRY_TYPE) continue;
@@ -182,15 +186,23 @@ export function questionNeedsUserPrompt(question: SubagentQuestion): boolean {
 export function formatQuestionForMainAgent(
   record: SpawnedSubagentRecord,
   question: SubagentQuestion,
-  recentPaneOutput: string
+  recentPaneOutput: string,
 ): string {
   const audienceLine = questionNeedsUserPrompt(question)
     ? "The subagent says this is for the user, or it is unsure. Prompt the user in this main conversation before answering."
     : "The subagent says this is for the main agent. Answer it if you can without asking the user.";
-  const options = question.options?.length ? `\nOptions:\n${question.options.map((option) => `- ${option}`).join("\n")}` : "";
-  const context = question.context?.trim() ? `\nContext from subagent:\n${question.context.trim()}\n` : "";
-  const whatDone = question.whatDone?.trim() ? `\nWhat the subagent says it did so far:\n${question.whatDone.trim()}\n` : "";
-  const recent = recentPaneOutput.trim() ? `\nRecent pane output:\n${recentPaneOutput.trim()}\n` : "";
+  const options = question.options?.length
+    ? `\nOptions:\n${question.options.map((option) => `- ${option}`).join("\n")}`
+    : "";
+  const context = question.context?.trim()
+    ? `\nContext from subagent:\n${question.context.trim()}\n`
+    : "";
+  const whatDone = question.whatDone?.trim()
+    ? `\nWhat the subagent says it did so far:\n${question.whatDone.trim()}\n`
+    : "";
+  const recent = recentPaneOutput.trim()
+    ? `\nRecent pane output:\n${recentPaneOutput.trim()}\n`
+    : "";
 
   return [
     `Subagent "${record.name}" (${record.paneId}) has a question.`,
@@ -232,7 +244,9 @@ export function formatSubagentDuration(ms: number | undefined): string {
   const minutes = totalMinutes % 60;
   const hours = Math.floor(totalMinutes / 60);
   const twoDigits = (part: number) => `${part}`.padStart(2, "0");
-  return hours ? `${hours}:${twoDigits(minutes)}:${twoDigits(seconds)}` : `${minutes}:${twoDigits(seconds)}`;
+  return hours
+    ? `${hours}:${twoDigits(minutes)}:${twoDigits(seconds)}`
+    : `${minutes}:${twoDigits(seconds)}`;
 }
 
 export function formatSubagentCost(usage: SubagentUsageStats | undefined): string {
@@ -240,12 +254,17 @@ export function formatSubagentCost(usage: SubagentUsageStats | undefined): strin
   return cost === undefined ? "unknown" : `$${cost.toFixed(2)}`;
 }
 
-export function formatSubagentModel(provider: string | undefined, model: string | undefined): string {
+export function formatSubagentModel(
+  provider: string | undefined,
+  model: string | undefined,
+): string {
   const providerValue = provider?.trim();
   const modelValue = model?.trim();
   if (providerValue && modelValue) {
     const providerPrefix = `${providerValue}/`;
-    return modelValue === providerValue || modelValue.startsWith(providerPrefix) ? modelValue : `${providerValue}/${modelValue}`;
+    return modelValue === providerValue || modelValue.startsWith(providerPrefix)
+      ? modelValue
+      : `${providerValue}/${modelValue}`;
   }
   return modelValue || providerValue || "unknown";
 }
@@ -275,7 +294,10 @@ function effortFromModelPattern(model: string | undefined): string | undefined {
   return normalizeSubagentEffort(match?.[1]);
 }
 
-export function formatSubagentEffort(record: SpawnedSubagentRecord, completion?: SubagentDoneEvent): string {
+export function formatSubagentEffort(
+  record: SpawnedSubagentRecord,
+  completion?: SubagentDoneEvent,
+): string {
   return (
     normalizeSubagentEffort(completion?.effort) ??
     normalizeSubagentEffort(completion?.thinkingLevel) ??
@@ -286,7 +308,11 @@ export function formatSubagentEffort(record: SpawnedSubagentRecord, completion?:
   );
 }
 
-export function formatSubagentUsage(usage: SubagentUsageStats | undefined, runtimeMs?: number, effort?: string): string {
+export function formatSubagentUsage(
+  usage: SubagentUsageStats | undefined,
+  runtimeMs?: number,
+  effort?: string,
+): string {
   const parts: string[] = [];
   const duration = formatSubagentDuration(runtimeMs);
   if (duration !== "unknown") parts.push(duration);
@@ -339,7 +365,10 @@ function truncateWords(text: string, maxWords: number): string {
 }
 
 function stripMarkdownPrefix(text: string): string {
-  return text.replace(/^[-*]\s+/, "").replace(/^#+\s+/, "").trim();
+  return text
+    .replace(/^[-*]\s+/, "")
+    .replace(/^#+\s+/, "")
+    .trim();
 }
 
 function stripLeadingStatusEmoji(text: string): string {
@@ -348,7 +377,7 @@ function stripLeadingStatusEmoji(text: string): string {
 
 function isUsageSummaryLine(text: string): boolean {
   return /^\d+:\d{2}(?::\d{2})?(?:\s+effort:[^\s]+)?(?:\s+\d+\s+turns?)?(?:\s+[↑↓RW]|\s+total:|\s+\$|\s+usage:)/.test(
-    compactLine(text)
+    compactLine(text),
   );
 }
 
@@ -373,7 +402,13 @@ function summarizeCompletionResult(rawResult: string, status: string): string {
       .replace(/^Error:\s*/i, "")
       .replace(/^Status:\s*/i, "")
       .trim();
-    if (!cleaned || isUsageSummaryLine(cleaned) || cleaned === "---" || cleaned.startsWith("```") || /^\[[^\]]+\]$/.test(cleaned)) {
+    if (
+      !cleaned ||
+      isUsageSummaryLine(cleaned) ||
+      cleaned === "---" ||
+      cleaned.startsWith("```") ||
+      /^\[[^\]]+\]$/.test(cleaned)
+    ) {
       continue;
     }
     return truncateText(truncateWords(cleaned, 25), 220);
@@ -382,8 +417,13 @@ function summarizeCompletionResult(rawResult: string, status: string): string {
   return completionFallback(status);
 }
 
-export function formatSubagentCompletionSummary(record: SpawnedSubagentRecord, completion: SubagentDoneEvent): string {
-  const runtimeMs = finiteNumber(completion.runtimeMs) ?? finiteNumber(completion.timestamp ? completion.timestamp - record.createdAt : undefined);
+export function formatSubagentCompletionSummary(
+  record: SpawnedSubagentRecord,
+  completion: SubagentDoneEvent,
+): string {
+  const runtimeMs =
+    finiteNumber(completion.runtimeMs) ??
+    finiteNumber(completion.timestamp ? completion.timestamp - record.createdAt : undefined);
   const task = completion.task?.trim() || record.promptPreview || "(unknown task)";
   const status = subagentCompletionStatus(completion);
   const statusEmoji = subagentStatusEmoji(status);
@@ -392,5 +432,9 @@ export function formatSubagentCompletionSummary(record: SpawnedSubagentRecord, c
   const usageLine = formatSubagentUsage(completion.usage, runtimeMs, effort);
   const resultSummary = summarizeCompletionResult(result, status);
 
-  return [`Task: ${truncateText(compactLine(task), 220)}`, usageLine, `${statusEmoji} ${resultSummary}`].join("\n");
+  return [
+    `Task: ${truncateText(compactLine(task), 220)}`,
+    usageLine,
+    `${statusEmoji} ${resultSummary}`,
+  ].join("\n");
 }

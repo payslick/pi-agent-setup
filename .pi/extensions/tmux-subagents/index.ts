@@ -26,7 +26,7 @@ const EXTENSION_NAME = "tmux-subagents";
 const SPAWN_TOOL_NAME = "spawn_subagents";
 const PANES_TOOL_NAME = "subagent_panes";
 const ASK_MAIN_TOOL_NAME = "ask_main_agent";
-const MAX_SUBAGENTS_PER_CALL = 8;
+const MAX_SUBAGENTS_PER_CALL = 15;
 const DEFAULT_CAPTURE_LINES = 120;
 const MAX_CAPTURE_LINES = 1000;
 const TMP_ROOT = path.join(".pi", "tmp", "subagents");
@@ -1011,66 +1011,106 @@ const layoutSchema = StringEnum(["none", "tiled", "even-horizontal", "even-verti
 });
 
 const deliverySchema = StringEnum(["prompt", "steer", "follow_up"] as const, {
-  description: "How to deliver a message to a subagent. prompt is normal; steer/follow_up queue while busy.",
+  description:
+    "How to deliver a message to a subagent. prompt is normal; steer/follow_up queue while busy.",
   default: "prompt",
 });
 
 const subagentSpecSchema = Type.Object({
-  name: Type.Optional(Type.String({ description: "Human-readable subagent name used for the pane title." })),
+  name: Type.Optional(
+    Type.String({ description: "Human-readable subagent name used for the pane title." }),
+  ),
   prompt: Type.Optional(
     Type.String({
-      description: "Initial user prompt/task sent to the subagent RPC session after it starts. Omit to start idle.",
-    })
+      description:
+        "Initial user prompt/task sent to the subagent RPC session after it starts. Omit to start idle.",
+    }),
   ),
   systemPrompt: Type.Optional(
     Type.String({
       description:
         "Subagent system instructions. By default these are appended to Pi's normal system prompt so tools still work.",
-    })
+    }),
   ),
   replaceSystemPrompt: Type.Optional(
-    Type.Boolean({ description: "Use --system-prompt instead of --append-system-prompt. Default false.", default: false })
+    Type.Boolean({
+      description: "Use --system-prompt instead of --append-system-prompt. Default false.",
+      default: false,
+    }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Model pattern/id for --model, e.g. anthropic/claude-sonnet-4-5 or sonnet:high." })
+    Type.String({
+      description: "Model pattern/id for --model, e.g. anthropic/claude-sonnet-4-5 or sonnet:high.",
+    }),
   ),
   provider: Type.Optional(Type.String({ description: "Provider name for --provider, if needed." })),
   thinking: Type.Optional(thinkingSchema),
   tools: Type.Optional(
-    Type.Array(Type.String(), { description: "Optional tool allowlist passed to --tools, e.g. [read, grep, find, ls]." })
+    Type.Array(Type.String(), {
+      description: "Optional tool allowlist passed to --tools, e.g. [read, grep, find, ls].",
+    }),
   ),
-  noTools: Type.Optional(Type.Boolean({ description: "Pass --no-tools to the subagent.", default: false })),
-  noBuiltinTools: Type.Optional(Type.Boolean({ description: "Pass --no-builtin-tools to the subagent.", default: false })),
+  noTools: Type.Optional(
+    Type.Boolean({ description: "Pass --no-tools to the subagent.", default: false }),
+  ),
+  noBuiltinTools: Type.Optional(
+    Type.Boolean({ description: "Pass --no-builtin-tools to the subagent.", default: false }),
+  ),
   noSession: Type.Optional(
-    Type.Boolean({ description: "Pass --no-session. Default false, so subagents are saved in Pi history.", default: false })
+    Type.Boolean({
+      description: "Pass --no-session. Default false, so subagents are saved in Pi history.",
+      default: false,
+    }),
   ),
   inheritContext: Type.Optional(
-    Type.Boolean({ description: "Load AGENTS.md/CLAUDE.md context files. Default true.", default: true })
+    Type.Boolean({
+      description: "Load AGENTS.md/CLAUDE.md context files. Default true.",
+      default: true,
+    }),
   ),
-  noExtensions: Type.Optional(Type.Boolean({ description: "Pass --no-extensions to the subagent. Default false.", default: false })),
-  noSkills: Type.Optional(Type.Boolean({ description: "Pass --no-skills to the subagent. Default false.", default: false })),
+  noExtensions: Type.Optional(
+    Type.Boolean({
+      description: "Pass --no-extensions to the subagent. Default false.",
+      default: false,
+    }),
+  ),
+  noSkills: Type.Optional(
+    Type.Boolean({
+      description: "Pass --no-skills to the subagent. Default false.",
+      default: false,
+    }),
+  ),
   noPromptTemplates: Type.Optional(
-    Type.Boolean({ description: "Pass --no-prompt-templates to the subagent. Default false.", default: false })
+    Type.Boolean({
+      description: "Pass --no-prompt-templates to the subagent. Default false.",
+      default: false,
+    }),
   ),
   cwd: Type.Optional(
     Type.String({
-      description: "Working directory for the subagent. Relative paths are resolved inside the current project; outside paths are rejected.",
-    })
+      description:
+        "Working directory for the subagent. Relative paths are resolved inside the current project; outside paths are rejected.",
+    }),
   ),
   split: Type.Optional(splitSchema),
   size: Type.Optional(
     Type.String({
       description:
         "tmux split size, e.g. 40% or 20. Only digits with optional % are accepted. Default is 40% for the first right-side subagent pane.",
-    })
+    }),
   ),
-  focus: Type.Optional(Type.Boolean({ description: "Focus the new pane after spawning. Default false.", default: false })),
+  focus: Type.Optional(
+    Type.Boolean({
+      description: "Focus the new pane after spawning. Default false.",
+      default: false,
+    }),
+  ),
   stayOpen: Type.Optional(
     Type.Boolean({
       description:
         "Keep the bridge visible if the RPC child exits unexpectedly. Normal agent_end always closes and removes the pane.",
       default: true,
-    })
+    }),
   ),
 });
 
@@ -1088,10 +1128,17 @@ type SubagentSpec = Static<typeof subagentSpecSchema>;
 
 const panesSchema = Type.Object({
   action: StringEnum(["list", "capture", "kill", "send", "abort"] as const, {
-    description: "list known subagents, capture pane output, kill a pane, or send/abort the RPC subagent.",
+    description:
+      "list known subagents, capture pane output, kill a pane, or send/abort the RPC subagent.",
   }),
-  id: Type.Optional(Type.String({ description: "Subagent id, name, or tmux pane id for capture/kill/send/abort." })),
-  lines: Type.Optional(Type.Number({ description: `Number of recent lines to capture. Default ${DEFAULT_CAPTURE_LINES}.` })),
+  id: Type.Optional(
+    Type.String({ description: "Subagent id, name, or tmux pane id for capture/kill/send/abort." }),
+  ),
+  lines: Type.Optional(
+    Type.Number({
+      description: `Number of recent lines to capture. Default ${DEFAULT_CAPTURE_LINES}.`,
+    }),
+  ),
   message: Type.Optional(Type.String({ description: "Message to send when action is send." })),
   delivery: Type.Optional(deliverySchema),
 });
@@ -1106,7 +1153,9 @@ const askMainAgentSchema = Type.Object({
   }),
   question: Type.String({ description: "The question that needs an answer." }),
   context: Type.Optional(Type.String({ description: "Relevant context for the question." })),
-  whatDone: Type.Optional(Type.String({ description: "Short summary of what the subagent has done so far." })),
+  whatDone: Type.Optional(
+    Type.String({ description: "Short summary of what the subagent has done so far." }),
+  ),
   options: Type.Optional(Type.Array(Type.String(), { description: "Optional answer choices." })),
 });
 
@@ -1151,7 +1200,8 @@ function resolveInsideRoot(root: string, requested: string | undefined): string 
 
 function validateSplitSize(size: string | undefined): string | undefined {
   if (!size) return undefined;
-  if (!/^\d+%?$/.test(size)) throw new Error(`Invalid tmux split size: ${size}. Use digits with optional %, e.g. 40%.`);
+  if (!/^\d+%?$/.test(size))
+    throw new Error(`Invalid tmux split size: ${size}. Use digits with optional %, e.g. 40%.`);
   return size;
 }
 
@@ -1171,7 +1221,12 @@ function piArgsForSpec(spec: SubagentSpec): string[] {
   return args;
 }
 
-function buildRunScript(options: { name: string; cwd: string; bridgePath: string; configPath: string }): string {
+function buildRunScript(options: {
+  name: string;
+  cwd: string;
+  bridgePath: string;
+  configPath: string;
+}): string {
   return `#!/usr/bin/env bash
 set -u
 printf '\\033]2;%s\\007' ${shellQuote(`pi rpc subagent: ${options.name}`)}
@@ -1187,7 +1242,13 @@ exec /bin/sh
 `;
 }
 
-async function writeSubagentFiles(ctx: ExtensionContext, spec: SubagentSpec, id: string, name: string, cwd: string) {
+async function writeSubagentFiles(
+  ctx: ExtensionContext,
+  spec: SubagentSpec,
+  id: string,
+  name: string,
+  cwd: string,
+) {
   const dir = path.resolve(ctx.cwd, TMP_ROOT, `${safeFilename(name)}-${id}`);
   await mkdir(dir, { recursive: true });
 
@@ -1195,7 +1256,8 @@ async function writeSubagentFiles(ctx: ExtensionContext, spec: SubagentSpec, id:
   if (promptPath) await writeFile(promptPath, spec.prompt ?? "", { encoding: "utf8", mode: 0o600 });
 
   const systemPromptPath = spec.systemPrompt?.trim() ? path.join(dir, "system.md") : undefined;
-  if (systemPromptPath) await writeFile(systemPromptPath, spec.systemPrompt ?? "", { encoding: "utf8", mode: 0o600 });
+  if (systemPromptPath)
+    await writeFile(systemPromptPath, spec.systemPrompt ?? "", { encoding: "utf8", mode: 0o600 });
 
   const bridgePath = path.join(dir, "bridge.mjs");
   const configPath = path.join(dir, "config.json");
@@ -1226,20 +1288,39 @@ async function writeSubagentFiles(ctx: ExtensionContext, spec: SubagentSpec, id:
         closeOnAgentEnd: true,
       },
       null,
-      2
+      2,
     )}\n`,
-    { encoding: "utf8", mode: 0o600 }
+    { encoding: "utf8", mode: 0o600 },
   );
-  await writeFile(runScriptPath, buildRunScript({ name, cwd, bridgePath, configPath }), { encoding: "utf8", mode: 0o700 });
+  await writeFile(runScriptPath, buildRunScript({ name, cwd, bridgePath, configPath }), {
+    encoding: "utf8",
+    mode: 0o700,
+  });
   await chmod(runScriptPath, 0o700);
 
-  return { id, dir, promptPath, systemPromptPath, bridgePath, configPath, controlPath, outboxPath, runScriptPath };
+  return {
+    id,
+    dir,
+    promptPath,
+    systemPromptPath,
+    bridgePath,
+    configPath,
+    controlPath,
+    outboxPath,
+    runScriptPath,
+  };
 }
 
-async function runTmux(pi: ExtensionAPI, args: string[], signal: AbortSignal | undefined, timeout = 10_000) {
+async function runTmux(
+  pi: ExtensionAPI,
+  args: string[],
+  signal: AbortSignal | undefined,
+  timeout = 10_000,
+) {
   const result = await pi.exec("tmux", args, { signal, timeout });
   if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim() || `tmux exited with code ${result.code}`;
+    const detail =
+      result.stderr.trim() || result.stdout.trim() || `tmux exited with code ${result.code}`;
     throw new Error(detail);
   }
   return result.stdout.trim();
@@ -1248,17 +1329,23 @@ async function runTmux(pi: ExtensionAPI, args: string[], signal: AbortSignal | u
 async function ensureTmux(pi: ExtensionAPI, signal: AbortSignal | undefined): Promise<TmuxContext> {
   const paneId = process.env.TMUX_PANE;
   if (!process.env.TMUX || !paneId) {
-    throw new Error("tmux subagents require running pi inside tmux (TMUX/TMUX_PANE are not set). Start tmux, then run pi again.");
+    throw new Error(
+      "tmux subagents require running pi inside tmux (TMUX/TMUX_PANE are not set). Start tmux, then run pi again.",
+    );
   }
   await runTmux(pi, ["-V"], signal);
-  const windowId = await runTmux(pi, ["display-message", "-p", "-t", paneId, "#{window_id}"], signal);
+  const windowId = await runTmux(
+    pi,
+    ["display-message", "-p", "-t", paneId, "#{window_id}"],
+    signal,
+  );
   return { paneId, windowId };
 }
 
 async function findLatestLiveSubagentPane(
   pi: ExtensionAPI,
   signal: AbortSignal | undefined,
-  windowId: string
+  windowId: string,
 ): Promise<string | undefined> {
   const records = Array.from(registry.values()).sort((a, b) => b.createdAt - a.createdAt);
   for (const record of records) {
@@ -1276,7 +1363,7 @@ async function spawnOneSubagent(
   split: SplitDirection,
   size: string | undefined,
   spec: SubagentSpec,
-  windowId: string
+  windowId: string,
 ): Promise<SpawnedSubagentRecord> {
   const id = randomUUID();
   const name = sanitizeName(spec.name, friendlySubagentName(id));
@@ -1291,7 +1378,9 @@ async function spawnOneSubagent(
   tmuxArgs.push("-c", cwd, `bash ${shellQuote(files.runScriptPath)}`);
 
   const paneId = await runTmux(pi, tmuxArgs, ctx.signal);
-  await runTmux(pi, ["select-pane", "-t", paneId, "-T", `pi:${name}`], ctx.signal).catch(() => undefined);
+  await runTmux(pi, ["select-pane", "-t", paneId, "-T", `pi:${name}`], ctx.signal).catch(
+    () => undefined,
+  );
 
   const record: SpawnedSubagentRecord = {
     id: files.id,
@@ -1323,10 +1412,12 @@ async function spawnOneSubagent(
 async function spawnSubagents(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  input: SpawnSubagentsInput
+  input: SpawnSubagentsInput,
 ): Promise<SpawnedSubagentRecord[]> {
   if (input.agents.length > MAX_SUBAGENTS_PER_CALL) {
-    throw new Error(`Too many subagents (${input.agents.length}); max is ${MAX_SUBAGENTS_PER_CALL}.`);
+    throw new Error(
+      `Too many subagents (${input.agents.length}); max is ${MAX_SUBAGENTS_PER_CALL}.`,
+    );
   }
 
   const tmux = await ensureTmux(pi, ctx.signal);
@@ -1337,26 +1428,43 @@ async function spawnSubagents(
   for (let index = 0; index < input.agents.length; index += 1) {
     const spec = input.agents[index];
     const placement = planSubagentPlacement(Boolean(stackTargetPane), spec.split, spec.size);
-    const targetPane = placement.target === "main" ? tmux.paneId : stackTargetPane ?? tmux.paneId;
-    const record = await spawnOneSubagent(pi, ctx, targetPane, placement.split, placement.size, spec, tmux.windowId);
+    const targetPane = placement.target === "main" ? tmux.paneId : (stackTargetPane ?? tmux.paneId);
+    const record = await spawnOneSubagent(
+      pi,
+      ctx,
+      targetPane,
+      placement.split,
+      placement.size,
+      spec,
+      tmux.windowId,
+    );
     records.push(record);
     stackTargetPane = record.paneId;
   }
 
   const layout: LayoutMode = input.layout ?? "none";
   if (layout !== "none" && records.length > 1) {
-    await runTmux(pi, ["select-layout", "-t", tmux.paneId, layout], ctx.signal).catch(() => undefined);
+    await runTmux(pi, ["select-layout", "-t", tmux.paneId, layout], ctx.signal).catch(
+      () => undefined,
+    );
   }
 
   return records;
 }
 
 function restoreRegistry(ctx: ExtensionContext, windowId: string | undefined) {
-  registry = windowId ? restoreRecordsForWindow(ctx.sessionManager.getBranch() as SubagentSessionEntry[], windowId) : new Map();
+  registry = windowId
+    ? restoreRecordsForWindow(ctx.sessionManager.getBranch() as SubagentSessionEntry[], windowId)
+    : new Map();
 }
 
 function formatRecord(record: SpawnedSubagentRecord, status?: PaneStatus): string {
-  const state = status?.exists === false ? "missing" : status?.dead ? "dead" : status?.currentCommand || "running";
+  const state =
+    status?.exists === false
+      ? "missing"
+      : status?.dead
+        ? "dead"
+        : status?.currentCommand || "running";
   const model = record.model ? ` model=${record.model}` : "";
   const provider = record.provider ? ` provider=${record.provider}` : "";
   return [
@@ -1371,18 +1479,29 @@ function formatRecord(record: SpawnedSubagentRecord, status?: PaneStatus): strin
 function findRecord(idOrName: string | undefined): SpawnedSubagentRecord | undefined {
   if (!idOrName) return undefined;
   for (const record of registry.values()) {
-    if (record.id === idOrName || record.paneId === idOrName || record.name === idOrName) return record;
+    if (record.id === idOrName || record.paneId === idOrName || record.name === idOrName)
+      return record;
     if (record.id.startsWith(idOrName)) return record;
   }
   return undefined;
 }
 
-async function paneStatus(pi: ExtensionAPI, paneId: string, signal: AbortSignal | undefined): Promise<PaneStatus> {
+async function paneStatus(
+  pi: ExtensionAPI,
+  paneId: string,
+  signal: AbortSignal | undefined,
+): Promise<PaneStatus> {
   try {
     const output = await runTmux(
       pi,
-      ["display-message", "-p", "-t", paneId, "#{pane_dead}\t#{pane_current_command}\t#{pane_title}\t#{window_id}"],
-      signal
+      [
+        "display-message",
+        "-p",
+        "-t",
+        paneId,
+        "#{pane_dead}\t#{pane_current_command}\t#{pane_title}\t#{window_id}",
+      ],
+      signal,
     );
     const [dead, currentCommand, title, windowId] = output.split("\t");
     return { exists: true, dead: dead === "1", currentCommand, title, windowId };
@@ -1394,7 +1513,7 @@ async function paneStatus(pi: ExtensionAPI, paneId: string, signal: AbortSignal 
 async function pruneMissingRecords(
   pi: ExtensionAPI,
   signal: AbortSignal | undefined,
-  windowId: string | undefined
+  windowId: string | undefined,
 ): Promise<number> {
   if (!process.env.TMUX || !windowId) return 0;
   let removed = 0;
@@ -1420,7 +1539,7 @@ async function pruneMissingRecords(
 
 function updateSubagentStatus(ctx: ExtensionContext) {
   if (!ctx.hasUI) return;
-  ctx.ui.setStatus(EXTENSION_NAME, registry.size ? `subagents:${registry.size}` : undefined);
+  ctx.ui.setStatus(EXTENSION_NAME, `agents:${registry.size}`);
 }
 
 async function appendSubagentQuestion(params: AskMainAgentInput): Promise<string> {
@@ -1485,12 +1604,18 @@ async function markSubagentDone(
   ctx: ExtensionContext,
   record: SpawnedSubagentRecord,
   reason: string,
-  completion?: SubagentDoneEvent
+  completion?: SubagentDoneEvent,
 ): Promise<void> {
   if (!registry.has(record.id)) return;
   registry.delete(record.id);
   outboxOffsets.delete(record.id);
-  pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 3, killedId: record.id, killedAt: Date.now(), reason, completion });
+  pi.appendEntry(CUSTOM_ENTRY_TYPE, {
+    version: 3,
+    killedId: record.id,
+    killedAt: Date.now(),
+    reason,
+    completion,
+  });
   await runTmux(pi, ["kill-pane", "-t", record.paneId], ctx.signal).catch(() => undefined);
   updateSubagentStatus(ctx);
 }
@@ -1499,7 +1624,7 @@ async function forwardSubagentQuestion(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   record: SpawnedSubagentRecord,
-  question: SubagentQuestion
+  question: SubagentQuestion,
 ): Promise<void> {
   if (seenQuestionIds.has(question.id)) return;
   seenQuestionIds.add(question.id);
@@ -1513,14 +1638,19 @@ function forwardSubagentCompletion(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   record: SpawnedSubagentRecord,
-  completion: SubagentDoneEvent
+  completion: SubagentDoneEvent,
 ): void {
   const message = formatSubagentCompletionSummary(record, completion);
   const payload = {
     customType: COMPLETION_MESSAGE_TYPE,
     content: message,
     display: true,
-    details: { subagentId: record.id, subagentName: record.name, paneId: record.paneId, completion },
+    details: {
+      subagentId: record.id,
+      subagentName: record.name,
+      paneId: record.paneId,
+      completion,
+    },
   };
   if (ctx.isIdle()) pi.sendMessage(payload);
   else pi.sendMessage(payload, { deliverAs: "followUp" });
@@ -1544,7 +1674,11 @@ async function pollSubagentOutboxes(pi: ExtensionAPI, ctx: ExtensionContext): Pr
   }
 }
 
-function startMaintenanceLoop(pi: ExtensionAPI, ctx: ExtensionContext, windowId: string | undefined) {
+function startMaintenanceLoop(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  windowId: string | undefined,
+) {
   if (maintenanceTimer) clearInterval(maintenanceTimer);
   if (!windowId) return;
   const tick = async () => {
@@ -1565,27 +1699,45 @@ async function listRecords(pi: ExtensionAPI, signal: AbortSignal | undefined): P
   return chunks.join("\n\n");
 }
 
-async function capturePane(pi: ExtensionAPI, paneId: string, lines: number, signal: AbortSignal | undefined): Promise<string> {
+async function capturePane(
+  pi: ExtensionAPI,
+  paneId: string,
+  lines: number,
+  signal: AbortSignal | undefined,
+): Promise<string> {
   return runTmux(pi, ["capture-pane", "-p", "-t", paneId, "-S", `-${lines}`], signal);
 }
 
-async function sendToSubagent(record: SpawnedSubagentRecord, message: string, delivery: MessageDelivery | undefined): Promise<string> {
+async function sendToSubagent(
+  record: SpawnedSubagentRecord,
+  message: string,
+  delivery: MessageDelivery | undefined,
+): Promise<string> {
   if (!message.trim()) throw new Error("Message is required for action=send.");
-  if (!record.controlPath) throw new Error(`Subagent ${record.name} has no control path; respawn it with the updated extension.`);
+  if (!record.controlPath)
+    throw new Error(
+      `Subagent ${record.name} has no control path; respawn it with the updated extension.`,
+    );
   await appendFile(
     record.controlPath,
     `${JSON.stringify({ type: "send", message, delivery: delivery ?? "prompt", timestamp: Date.now() })}\n`,
-    "utf8"
+    "utf8",
   );
   return `Queued message to ${record.name} ${record.paneId}.`;
 }
 
-async function handlePaneAction(pi: ExtensionAPI, ctx: ExtensionContext, input: PanesInput): Promise<string> {
+async function handlePaneAction(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  input: PanesInput,
+): Promise<string> {
   const tmux = await ensureTmux(pi, ctx.signal);
   const removed = await pruneMissingRecords(pi, ctx.signal, tmux.windowId);
   if (input.action === "list") {
     const text = await listRecords(pi, ctx.signal);
-    return removed > 0 ? `Pruned ${removed} stale subagent record${removed === 1 ? "" : "s"}.\n\n${text}` : text;
+    return removed > 0
+      ? `Pruned ${removed} stale subagent record${removed === 1 ? "" : "s"}.\n\n${text}`
+      : text;
   }
 
   const record = findRecord(input.id);
@@ -1605,7 +1757,11 @@ async function handlePaneAction(pi: ExtensionAPI, ctx: ExtensionContext, input: 
   if (input.action === "send") return sendToSubagent(record, input.message ?? "", input.delivery);
 
   if (input.action === "abort") {
-    await appendFile(record.controlPath, `${JSON.stringify({ type: "abort", timestamp: Date.now() })}\n`, "utf8");
+    await appendFile(
+      record.controlPath,
+      `${JSON.stringify({ type: "abort", timestamp: Date.now() })}\n`,
+      "utf8",
+    );
     return `Queued abort for ${record.name} ${record.paneId}.`;
   }
 
@@ -1620,7 +1776,7 @@ function spawnResultText(records: SpawnedSubagentRecord[]): string {
     `Spawned ${records.length} RPC subagent pane${records.length === 1 ? "" : "s"}.`,
     ...records.map(
       (record) =>
-        `- ${record.name}: ${record.paneId}\n  task: ${record.promptPreview}\n  control: ${shortenHomePath(record.controlPath)}`
+        `- ${record.name}: ${record.paneId}\n  task: ${record.promptPreview}\n  control: ${shortenHomePath(record.controlPath)}`,
     ),
   ].join("\n");
 }
@@ -1629,9 +1785,14 @@ function parseSpawnArgs(args: string): SpawnSubagentsInput | null {
   const trimmed = args.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed) as SpawnSubagentsInput | SubagentSpec[] | SubagentSpec | unknown;
+    const parsed = JSON.parse(trimmed) as
+      | SpawnSubagentsInput
+      | SubagentSpec[]
+      | SubagentSpec
+      | unknown;
     if (Array.isArray(parsed)) return { agents: parsed as SubagentSpec[] };
-    if (!parsed || typeof parsed !== "object") throw new Error("Subagent JSON must be an object or array.");
+    if (!parsed || typeof parsed !== "object")
+      throw new Error("Subagent JSON must be an object or array.");
     if ("agents" in parsed) return parsed as SpawnSubagentsInput;
     return { agents: [parsed as SubagentSpec] };
   }
@@ -1642,16 +1803,27 @@ async function promptForSubagent(ctx: ExtensionContext): Promise<SpawnSubagentsI
   if (!ctx.hasUI) return null;
   const prompt = await ctx.ui.editor("Subagent prompt/task (optional; blank starts idle)", "");
   const nameInput = (await ctx.ui.input("Subagent name (optional)", "auto-generated")) || "";
-  const name = nameInput.trim() && nameInput.trim() !== "auto-generated" ? nameInput.trim() : undefined;
+  const name =
+    nameInput.trim() && nameInput.trim() !== "auto-generated" ? nameInput.trim() : undefined;
   const systemPrompt = await ctx.ui.editor("System instructions to append (optional)", "");
-  const model = (await ctx.ui.input("Model (optional)", ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "")) || undefined;
+  const model =
+    (await ctx.ui.input(
+      "Model (optional)",
+      ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "",
+    )) || undefined;
   const toolsText = (await ctx.ui.input("Tool allowlist (optional comma-separated)", "")) || "";
   const splitChoice = (await ctx.ui.select("Split pane", ["auto", "right", "below"])) as
     | "auto"
     | SplitDirection
     | undefined;
-  const saveSession = await ctx.ui.confirm("Save subagent session?", "Yes = normal Pi session history. No = --no-session.");
-  const focus = await ctx.ui.confirm("Focus new pane?", "No keeps you in the current Pi pane while the subagent runs.");
+  const saveSession = await ctx.ui.confirm(
+    "Save subagent session?",
+    "Yes = normal Pi session history. No = --no-session.",
+  );
+  const focus = await ctx.ui.confirm(
+    "Focus new pane?",
+    "No keeps you in the current Pi pane while the subagent runs.",
+  );
 
   return {
     agents: [
@@ -1680,14 +1852,19 @@ function parseSubagentsCommand(args: string): PanesInput {
   const [actionRaw, id, third, ...rest] = trimmed.split(/\s+/);
   const action = (actionRaw || "list") as PaneAction;
   if (!["list", "capture", "kill", "send", "abort"].includes(action)) {
-    throw new Error("Usage: /agents [list|capture <id> [lines]|kill <id>|abort <id>|send <id> <message>]");
+    throw new Error(
+      "Usage: /agents [list|capture <id> [lines]|kill <id>|abort <id>|send <id> <message>]",
+    );
   }
   if (action === "send") return { action, id, message: [third, ...rest].filter(Boolean).join(" ") };
   return { action, id, lines: third ? Number(third) : undefined };
 }
 
 export default function tmuxSubagents(pi: ExtensionAPI) {
-  pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, (message) => new Text(String(message.content ?? ""), 0, 0));
+  pi.registerMessageRenderer(
+    COMPLETION_MESSAGE_TYPE,
+    (message) => new Text(String(message.content ?? ""), 0, 0),
+  );
 
   pi.on("session_start", async (_event, ctx) => {
     const tmux = await ensureTmux(pi, ctx.signal).catch(() => undefined);
@@ -1699,9 +1876,10 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
     startMaintenanceLoop(pi, ctx, tmux?.windowId);
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (_event, ctx) => {
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     maintenanceTimer = undefined;
+    if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_NAME, undefined);
   });
 
   pi.registerTool({
@@ -1731,7 +1909,8 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
       "and receives messages from the main agent through subagent_panes(action='send').",
       "Each subagent can have its own prompt, appended/replaced system prompt, model, thinking level, tool allowlist, cwd, and session mode.",
     ].join(" "),
-    promptSnippet: "Spawn independent Pi RPC subagents in visible tmux panes with custom prompts/models/system instructions",
+    promptSnippet:
+      "Spawn independent Pi RPC subagents in visible tmux panes with custom prompts/models/system instructions",
     promptGuidelines: [
       "Use spawn_subagents when work can be delegated to independent agents that the user should be able to watch in tmux panes.",
       "When using spawn_subagents, give each subagent a clear, bounded prompt and a concise name.",
@@ -1741,7 +1920,10 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const records = await spawnSubagents(pi, ctx, params);
       updateSubagentStatus(ctx);
-      return { content: [{ type: "text" as const, text: spawnResultText(records) }], details: { records } };
+      return {
+        content: [{ type: "text" as const, text: spawnResultText(records) }],
+        details: { records },
+      };
     },
     renderCall(args, theme) {
       const agents = Array.isArray(args.agents) ? args.agents : [];
@@ -1754,19 +1936,20 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
     renderResult(result, _options, theme) {
-      const records = (result.details as { records?: SpawnedSubagentRecord[] } | undefined)?.records ?? [];
+      const records =
+        (result.details as { records?: SpawnedSubagentRecord[] } | undefined)?.records ?? [];
       if (records.length === 0) {
         const first = result.content[0];
         return new Text(first?.type === "text" ? first.text : "(no subagents)", 0, 0);
       }
       let text = `${theme.fg("success", "✓")} ${theme.fg("toolTitle", theme.bold("spawned "))}${theme.fg(
         "accent",
-        `${records.length} rpc pane${records.length === 1 ? "" : "s"}`
+        `${records.length} rpc pane${records.length === 1 ? "" : "s"}`,
       )}`;
       for (const record of records) {
         text += `\n  ${theme.fg("accent", record.name)} ${theme.fg("muted", record.paneId)} ${theme.fg(
           "dim",
-          record.promptPreview
+          record.promptPreview,
         )}`;
       }
       return new Text(text, 0, 0);
@@ -1776,8 +1959,10 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
   pi.registerTool({
     name: PANES_TOOL_NAME,
     label: "Manage subagent panes",
-    description: "List known tmux subagent panes, capture recent output, send messages to RPC subagents, abort, or kill panes.",
-    promptSnippet: "List, capture, send messages to, abort, or kill tmux subagent panes spawned by spawn_subagents",
+    description:
+      "List known tmux subagent panes, capture recent output, send messages to RPC subagents, abort, or kill panes.",
+    promptSnippet:
+      "List, capture, send messages to, abort, or kill tmux subagent panes spawned by spawn_subagents",
     parameters: panesSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const text = await handlePaneAction(pi, ctx, params);
@@ -1812,7 +1997,8 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("agents", {
-    description: "List/capture/send/abort/kill spawned subagent panes. Usage: /agents [list|capture <id> [lines]|send <id> <msg>|abort <id>|kill <id>]",
+    description:
+      "List/capture/send/abort/kill spawned subagent panes. Usage: /agents [list|capture <id> [lines]|send <id> <msg>|abort <id>|kill <id>]",
     handler: async (args, ctx) => {
       let input: PanesInput;
       try {
@@ -1824,7 +2010,8 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
       try {
         const text = await handlePaneAction(pi, ctx, input);
         updateSubagentStatus(ctx);
-        if (input.action === "list" || input.action === "capture") await ctx.ui.editor(`Subagents ${input.action}`, text);
+        if (input.action === "list" || input.action === "capture")
+          await ctx.ui.editor(`Subagents ${input.action}`, text);
         else ctx.ui.notify(text, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");

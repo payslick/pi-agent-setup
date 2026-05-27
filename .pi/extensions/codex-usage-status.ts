@@ -8,7 +8,8 @@ import { AuthStorage } from "@earendil-works/pi-coding-agent";
 const STATUS_KEY = "codex-usage";
 const WIDGET_KEY = "codex-usage-details";
 const OPENAI_CODEX_PROVIDER = "openai-codex";
-const CHATGPT_USAGE_URL = process.env.CODEX_USAGE_URL ?? "https://chatgpt.com/backend-api/wham/usage";
+const CHATGPT_USAGE_URL =
+  process.env.CODEX_USAGE_URL ?? "https://chatgpt.com/backend-api/wham/usage";
 const REFRESH_MS = 5 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const WARNING_PERCENT = 75;
@@ -81,7 +82,10 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const payload = token.split(".")[1];
   if (!payload) return null;
   try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
   } catch {
     return null;
   }
@@ -103,7 +107,10 @@ async function loadPiCodexAuth(): Promise<AuthInfo | null> {
   if (!token) return null;
 
   const refreshed = storage.get(OPENAI_CODEX_PROVIDER);
-  const refreshedAccountId = refreshed?.type === "oauth" && typeof refreshed.accountId === "string" ? refreshed.accountId : undefined;
+  const refreshedAccountId =
+    refreshed?.type === "oauth" && typeof refreshed.accountId === "string"
+      ? refreshed.accountId
+      : undefined;
   const storedAccountId = typeof stored.accountId === "string" ? stored.accountId : undefined;
   return {
     token,
@@ -122,10 +129,12 @@ async function loadCodexCliAuth(): Promise<AuthInfo | null> {
   }
 
   const tokens = asRecord(asRecord(parsed)?.tokens);
-  const token = typeof tokens?.access_token === "string" ? nonEmpty(tokens.access_token) : undefined;
+  const token =
+    typeof tokens?.access_token === "string" ? nonEmpty(tokens.access_token) : undefined;
   if (!token) return null;
 
-  const storedAccountId = typeof tokens?.account_id === "string" ? nonEmpty(tokens.account_id) : undefined;
+  const storedAccountId =
+    typeof tokens?.account_id === "string" ? nonEmpty(tokens.account_id) : undefined;
   return {
     token,
     accountId: storedAccountId || accountIdFromAccessToken(token),
@@ -134,7 +143,8 @@ async function loadCodexCliAuth(): Promise<AuthInfo | null> {
 }
 
 async function loadAuth(): Promise<AuthInfo> {
-  const envToken = nonEmpty(process.env.CODEX_USAGE_ACCESS_TOKEN) || nonEmpty(process.env.CODEX_ACCESS_TOKEN);
+  const envToken =
+    nonEmpty(process.env.CODEX_USAGE_ACCESS_TOKEN) || nonEmpty(process.env.CODEX_ACCESS_TOKEN);
   if (envToken) {
     return {
       token: envToken,
@@ -149,7 +159,9 @@ async function loadAuth(): Promise<AuthInfo> {
   const codexCliAuth = await loadCodexCliAuth();
   if (codexCliAuth) return codexCliAuth;
 
-  throw new Error("No ChatGPT/Codex OAuth token found. Run /login openai-codex in Pi or `codex login`.");
+  throw new Error(
+    "No ChatGPT/Codex OAuth token found. Run /login openai-codex in Pi or `codex login`.",
+  );
 }
 
 function extractErrorMessage(payload: unknown, fallback: string): string {
@@ -190,7 +202,9 @@ async function fetchCodexUsage(): Promise<UsageFetchResult> {
 
     if (!response.ok) {
       const message = extractErrorMessage(payload, text || response.statusText);
-      throw new Error(`Codex usage request failed (${response.status} ${response.statusText}): ${message}`);
+      throw new Error(
+        `Codex usage request failed (${response.status} ${response.statusText}): ${message}`,
+      );
     }
 
     return {
@@ -227,9 +241,14 @@ function formatDuration(totalSeconds: number): string {
   return `${Math.max(1, minutes)}m`;
 }
 
-function resetText(window: RateLimitWindowPayload | null | undefined, nowSeconds = Date.now() / 1000): string {
-  if (typeof window?.reset_after_seconds === "number") return formatDuration(window.reset_after_seconds);
-  if (typeof window?.reset_at === "number") return formatDuration(Math.max(0, window.reset_at - nowSeconds));
+function resetText(
+  window: RateLimitWindowPayload | null | undefined,
+  nowSeconds = Date.now() / 1000,
+): string {
+  if (typeof window?.reset_after_seconds === "number")
+    return formatDuration(window.reset_after_seconds);
+  if (typeof window?.reset_at === "number")
+    return formatDuration(Math.max(0, window.reset_at - nowSeconds));
   return "unknown";
 }
 
@@ -244,9 +263,10 @@ function formatPercent(value: number | undefined): string {
 }
 
 function maxUsedPercent(payload: CodexUsagePayload): number {
-  const candidates = [usedPercent(payload.rate_limit?.primary_window), usedPercent(payload.rate_limit?.secondary_window)].filter(
-    (value): value is number => value !== undefined
-  );
+  const candidates = [
+    usedPercent(payload.rate_limit?.primary_window),
+    usedPercent(payload.rate_limit?.secondary_window),
+  ].filter((value): value is number => value !== undefined);
   return candidates.length ? Math.max(...candidates) : 0;
 }
 
@@ -256,7 +276,9 @@ function colorForUsage(ctx: ExtensionContext, value: number): (text: string) => 
   return (text) => ctx.ui.theme.fg("accent", text);
 }
 
-function formatCompactWindow(window: RateLimitWindowPayload | null | undefined): string | undefined {
+function formatCompactWindow(
+  window: RateLimitWindowPayload | null | undefined,
+): string | undefined {
   const used = usedPercent(window);
   if (used === undefined && !window?.limit_window_seconds) return undefined;
   return `${windowLabel(window)}:${formatPercent(used)}`;
@@ -269,9 +291,10 @@ function formatStatus(result: UsageFetchResult, ctx: ExtensionContext): string {
   const plan = shortPlan(payload.plan_type);
   if (plan) parts.push(plan);
 
-  const windows = [formatCompactWindow(rateLimit?.primary_window), formatCompactWindow(rateLimit?.secondary_window)].filter(
-    Boolean
-  );
+  const windows = [
+    formatCompactWindow(rateLimit?.primary_window),
+    formatCompactWindow(rateLimit?.secondary_window),
+  ].filter(Boolean);
   if (windows.length) parts.push(windows.join(" "));
   if (rateLimit?.limit_reached || payload.rate_limit_reached_type) parts.push("limited");
 
@@ -279,7 +302,10 @@ function formatStatus(result: UsageFetchResult, ctx: ExtensionContext): string {
   return colorForUsage(ctx, maxUsedPercent(payload))(text);
 }
 
-function formatWindowDetail(name: string, window: RateLimitWindowPayload | null | undefined): string | undefined {
+function formatWindowDetail(
+  name: string,
+  window: RateLimitWindowPayload | null | undefined,
+): string | undefined {
   const used = usedPercent(window);
   if (used === undefined && !window?.limit_window_seconds) return undefined;
   return `${name} (${windowLabel(window)}): used ${formatPercent(used)}, resets in ${resetText(window)}`;
@@ -302,7 +328,10 @@ function formatDetails(result: UsageFetchResult): string[] {
   for (const additional of payload.additional_rate_limits ?? []) {
     const label = additional.limit_name || additional.metered_feature || "Additional limit";
     const addPrimary = formatWindowDetail(label, additional.rate_limit?.primary_window);
-    const addSecondary = formatWindowDetail(`${label} secondary`, additional.rate_limit?.secondary_window);
+    const addSecondary = formatWindowDetail(
+      `${label} secondary`,
+      additional.rate_limit?.secondary_window,
+    );
     if (addPrimary) lines.push(addPrimary);
     if (addSecondary) lines.push(addSecondary);
   }
@@ -311,14 +340,18 @@ function formatDetails(result: UsageFetchResult): string[] {
     const creditBits = [
       payload.credits.unlimited ? "unlimited" : undefined,
       payload.credits.has_credits ? "has credits" : "no credits",
-      payload.credits.balance !== undefined && payload.credits.balance !== null ? `balance ${payload.credits.balance}` : undefined,
+      payload.credits.balance !== undefined && payload.credits.balance !== null
+        ? `balance ${payload.credits.balance}`
+        : undefined,
       payload.credits.overage_limit_reached ? "overage limit reached" : undefined,
     ].filter(Boolean);
     if (creditBits.length) lines.push(`Credits: ${creditBits.join(", ")}`);
   }
 
   if (payload.spend_control?.reached) lines.push("Spend control reached");
-  lines.push(`Fetched ${result.fetchedAt.toLocaleTimeString()} via ${result.authSource === "pi" ? "Pi auth" : result.authSource}`);
+  lines.push(
+    `Fetched ${result.fetchedAt.toLocaleTimeString()} via ${result.authSource === "pi" ? "Pi auth" : result.authSource}`,
+  );
   return lines;
 }
 
@@ -328,7 +361,10 @@ function setStatus(ctx: ExtensionContext, text: string | undefined) {
   ctx.ui.setStatus(STATUS_KEY, text);
 }
 
-async function refreshCodexUsage(ctx: ExtensionContext, showErrors = false): Promise<UsageFetchResult | undefined> {
+async function refreshCodexUsage(
+  ctx: ExtensionContext,
+  showErrors = false,
+): Promise<UsageFetchResult | undefined> {
   if (!ctx.hasUI || refreshInFlight) return lastFetch;
   refreshInFlight = true;
 
@@ -393,7 +429,10 @@ export default function codexUsageStatus(pi: ExtensionAPI) {
         return;
       }
 
-      if (lastError) ctx.ui.setWidget(WIDGET_KEY, [`Codex usage unavailable: ${lastError}`], { placement: "belowEditor" });
+      if (lastError)
+        ctx.ui.setWidget(WIDGET_KEY, [`Codex usage unavailable: ${lastError}`], {
+          placement: "belowEditor",
+        });
     },
   });
 }

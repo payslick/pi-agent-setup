@@ -4,13 +4,17 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const SUMMARY_KEY = "context-summary-footer";
+const CODEX_STATUS_KEY = "codex-usage";
+const VIM_STATUS_KEY = "vim-motion";
 const REFRESH_EVERY_AGENT_TURNS = Number(process.env.PI_CTX_SUMMARY_EVERY ?? 3);
 const SUMMARY_TIMEOUT_MS = Number(process.env.PI_CTX_SUMMARY_TIMEOUT_MS ?? 20_000);
-const SUMMARY_MODEL = process.env.PI_CTX_SUMMARY_MODEL || "openai-codex/gpt-5.3-codex-spark";
+const SUMMARY_MODEL = process.env.PI_CTX_SUMMARY_MODEL || "openai-codex/gpt-5.5";
+const SUMMARY_THINKING = process.env.PI_CTX_SUMMARY_THINKING || "low";
+const RECENT_USER_TURNS = Number(process.env.PI_CTX_SUMMARY_RECENT_USER_TURNS ?? 4);
 const MAX_USER_SAID_CHARS = 4_000;
 const MAX_SUMMARY_CHARS = 180;
 
-let summaryText = "Session context: starting up.";
+let summaryText = "Starting up…";
 let agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
 let summarizeInFlight = false;
 let pendingRefresh = false;
@@ -42,10 +46,11 @@ function oneLine(text: string): string {
 
 function trimSentence(text: string): string {
   const line = oneLine(text).replace(/^(["'`]+)|(["'`]+)$/g, "");
-  if (!line) return "Session context: active coding session.";
+  if (!line) return "Active coding session.";
   const withoutPrefix = line.replace(/^session context:\s*/i, "");
-  const truncated = withoutPrefix.length > MAX_SUMMARY_CHARS ? `${withoutPrefix.slice(0, MAX_SUMMARY_CHARS - 1).trim()}…` : withoutPrefix;
-  return `Session context: ${truncated}`;
+  return withoutPrefix.length > MAX_SUMMARY_CHARS
+    ? `${withoutPrefix.slice(0, MAX_SUMMARY_CHARS - 1).trim()}…`
+    : withoutPrefix;
 }
 
 function messageText(message: AgentMessage): string {
@@ -55,7 +60,8 @@ function messageText(message: AgentMessage): string {
     return content
       .map((part) => {
         if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "text" in part && typeof part.text === "string") return part.text;
+        if (part && typeof part === "object" && "text" in part && typeof part.text === "string")
+          return part.text;
         return "";
       })
       .filter(Boolean)
@@ -66,17 +72,28 @@ function messageText(message: AgentMessage): string {
 
 function userSaid(ctx: ExtensionContext): string {
   const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-  const lines = entries
-    .filter((entry): entry is Extract<SessionEntry, { type: "message" }> => entry.type === "message" && entry.message.role === "user")
+  const userTurns = entries
+    .filter(
+      (entry): entry is Extract<SessionEntry, { type: "message" }> =>
+        entry.type === "message" && entry.message.role === "user",
+    )
     .map((entry) => oneLine(messageText(entry.message)))
-    .filter(Boolean)
-    .map((text) => `user: ${text}`);
-  if (lastPrompt.trim()) lines.push(`current user request: ${oneLine(lastPrompt)}`);
+    .filter(Boolean);
+
+  const recent = userTurns.slice(-Math.max(1, RECENT_USER_TURNS));
+  const current = oneLine(lastPrompt);
+  if (current && current !== recent.at(-1)) recent.push(current);
+
+  const lines = recent.map((text, index) => `user turn ${index + 1}: ${text}`);
   const text = lines.join("\n");
   return text.length > MAX_USER_SAID_CHARS ? text.slice(-MAX_USER_SAID_CHARS) : text;
 }
 
-function runPiSummarizer(prompt: string, cwd: string, signal: AbortSignal | undefined): Promise<CommandResult> {
+function runPiSummarizer(
+  prompt: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<CommandResult> {
   return new Promise((resolve) => {
     const args = [
       "--print",
@@ -85,7 +102,7 @@ function runPiSummarizer(prompt: string, cwd: string, signal: AbortSignal | unde
       "--model",
       SUMMARY_MODEL,
       "--thinking",
-      "off",
+      SUMMARY_THINKING,
       "--no-tools",
       "--no-extensions",
       "--no-skills",
@@ -93,13 +110,16 @@ function runPiSummarizer(prompt: string, cwd: string, signal: AbortSignal | unde
       "--no-context-files",
       "--no-session",
       "--system-prompt",
-      "You summarize coding-agent sessions. Reply with exactly one concise sentence, no markdown.",
+      "You summarize recent user requests in coding sessions. Reply with exactly one short sentence, no markdown.",
       prompt,
     ];
 
     const child = spawn(process.env.PI_CTX_SUMMARY_PI_BIN || "pi", args, {
       cwd,
-      env: { ...process.env, PI_OFFLINE: process.env.PI_CTX_SUMMARY_OFFLINE ?? process.env.PI_OFFLINE },
+      env: {
+        ...process.env,
+        PI_OFFLINE: process.env.PI_CTX_SUMMARY_OFFLINE ?? process.env.PI_OFFLINE,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
@@ -112,7 +132,12 @@ function runPiSummarizer(prompt: string, cwd: string, signal: AbortSignal | unde
       settled = true;
       clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
-      resolve({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), code, timedOut });
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        code,
+        timedOut,
+      });
     };
     const abort = () => {
       timedOut = true;
@@ -132,7 +157,10 @@ function runPiSummarizer(prompt: string, cwd: string, signal: AbortSignal | unde
 function heuristicSummary(ctx: ExtensionContext): string {
   const entries = ctx.sessionManager.getBranch() as SessionEntry[];
   const userTexts = entries
-    .filter((entry): entry is Extract<SessionEntry, { type: "message" }> => entry.type === "message" && entry.message.role === "user")
+    .filter(
+      (entry): entry is Extract<SessionEntry, { type: "message" }> =>
+        entry.type === "message" && entry.message.role === "user",
+    )
     .map((entry) => oneLine(messageText(entry.message)))
     .filter(Boolean);
   const latest = lastPrompt.trim() || userTexts.at(-1) || "active coding session";
@@ -156,9 +184,12 @@ async function refreshSummary(ctx: ExtensionContext, force = false): Promise<voi
       summaryText = heuristicSummary(ctx);
       return;
     }
-    const prompt = `Summarize what this Pi coding session is about in exactly one sentence. Use only what the user said below; do not infer from assistant/tool context.\n\nUser said:\n${said}`;
+    const prompt = `Summarize the user's last few turns into exactly one short sentence for a footer reminder. Use only the user turns below (ignore assistant/tool context).\n\nRecent user turns:\n${said}`;
     const result = await runPiSummarizer(prompt, ctx.cwd, ctx.signal);
-    summaryText = result.code === 0 && result.stdout.trim() ? trimSentence(result.stdout) : heuristicSummary(ctx);
+    summaryText =
+      result.code === 0 && result.stdout.trim()
+        ? trimSentence(result.stdout)
+        : heuristicSummary(ctx);
   } catch {
     summaryText = heuristicSummary(ctx);
   } finally {
@@ -209,7 +240,22 @@ function installFooter(ctx: ExtensionContext): void {
         const usage = ctx.getContextUsage();
         const percent = usage?.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
         const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-        const statsLeft = [`↑${formatTokens(input)}`, `↓${formatTokens(output)}`, `$${cost.toFixed(3)}`, `${percent}/${formatTokens(window)}`].join(" ");
+        const statusEntries = Array.from(footerData.getExtensionStatuses().entries()).filter(
+          ([key]) => key !== SUMMARY_KEY,
+        );
+        const codexStatus = oneLine(
+          statusEntries.find(([key]) => key === CODEX_STATUS_KEY)?.[1] ?? "",
+        );
+        const vimStatus = oneLine(statusEntries.find(([key]) => key === VIM_STATUS_KEY)?.[1] ?? "");
+        const statsLeft = [
+          `↑${formatTokens(input)}`,
+          `↓${formatTokens(output)}`,
+          `$${cost.toFixed(3)}`,
+          `${percent}/${formatTokens(window)}`,
+          codexStatus || undefined,
+        ]
+          .filter(Boolean)
+          .join(" ");
         const model = ctx.model?.id || "no-model";
         const pad = " ".repeat(Math.max(1, width - visibleWidth(statsLeft) - visibleWidth(model)));
         const statsLine = truncateToWidth(theme.fg("dim", statsLeft + pad + model), width);
@@ -220,11 +266,15 @@ function installFooter(ctx: ExtensionContext): void {
           statsLine,
         ];
 
-        const statuses = Array.from(footerData.getExtensionStatuses().entries())
-          .filter(([key]) => key !== SUMMARY_KEY)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([, text]) => oneLine(text));
-        if (statuses.length) lines.push(truncateToWidth(statuses.join(" "), width, theme.fg("dim", "...")));
+        const statuses = [
+          vimStatus || undefined,
+          ...statusEntries
+            .filter(([key]) => key !== CODEX_STATUS_KEY && key !== VIM_STATUS_KEY)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([, text]) => oneLine(text)),
+        ].filter(Boolean);
+        if (statuses.length)
+          lines.push(truncateToWidth(statuses.join(" "), width, theme.fg("dim", "...")));
         return lines;
       },
     };
@@ -241,7 +291,7 @@ export default function contextSummaryFooter(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     lastPrompt = event.prompt;
-    if (summaryText === "Session context: starting up.") summaryText = heuristicSummary(ctx);
+    if (summaryText === "Starting up…") summaryText = heuristicSummary(ctx);
     requestFooterRender?.();
   });
 

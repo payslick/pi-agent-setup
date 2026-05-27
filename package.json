@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "check": "oxlint .pi/extensions && bun run typecheck"
+    "test": "bun test ./.pi/extensions",
+    "check": "bun .pi/scripts/check.ts",
+    "format": "oxfmt"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.74.0",
@@ -15,6 +17,7 @@
   "devDependencies": {
     "@types/bun": "^1.3.13",
     "@typescript/native-preview": "^7.0.0-dev.20260512.1",
+    "oxfmt": "^0.49.0",
     "oxlint": "^1.64.0"
   }
 }

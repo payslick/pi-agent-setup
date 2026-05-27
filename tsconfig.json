@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": [".pi/extensions/**/*.ts"]
+  "include": [".pi/extensions/**/*.ts", ".pi/scripts/**/*.ts"]
 }

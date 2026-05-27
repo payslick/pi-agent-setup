@@ -1,6 +1,4 @@
 {
   "theme": "catppuccin-mocha",
-  "packages": [
-    "https://github.com/omryn/pi-catppuccin-themes"
-  ]
+  "packages": ["https://github.com/omryn/pi-catppuccin-themes"]
 }

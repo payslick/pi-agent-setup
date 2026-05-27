@@ -18,7 +18,7 @@ const readManyFilesLinesSchema = Type.Object({
       description:
         "Filesystem range spec. Formats: path, path:line, path:start:end, path:start:, or path::end. Examples: src/app.ts:1:80, package.json.",
     }),
-    { description: "Files and line ranges to read." }
+    { description: "Files and line ranges to read." },
   ),
 });
 
@@ -97,17 +97,20 @@ function parseRange(raw: string): FileLineRange {
 function resolveInsideRoot(root: string, filePath: string): string | null {
   const absolutePath = path.resolve(root, filePath);
   const relativePath = path.relative(root, absolutePath);
-  const insideRoot = relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+  const insideRoot =
+    relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
   return insideRoot ? absolutePath : null;
 }
 
 async function readRange(root: string, range: FileLineRange): Promise<string> {
   if (!range.file) return `=== ${range.raw} ===\n[ERROR: empty file path]\n`;
   if (range.startLine < 1) return `=== ${range.raw} ===\n[ERROR: start line must be >= 1]\n`;
-  if (range.endLine < range.startLine) return `=== ${range.raw} ===\n[ERROR: end line must be >= start line]\n`;
+  if (range.endLine < range.startLine)
+    return `=== ${range.raw} ===\n[ERROR: end line must be >= start line]\n`;
 
   const absolutePath = resolveInsideRoot(root, range.file);
-  if (absolutePath === null) return `=== ${range.raw} ===\n[ERROR: path is outside the current working directory]\n`;
+  if (absolutePath === null)
+    return `=== ${range.raw} ===\n[ERROR: path is outside the current working directory]\n`;
 
   try {
     const text = await readFile(absolutePath, "utf8");
@@ -212,7 +215,7 @@ function stripLeadingAssignments(words: string[]): string[] {
 
 function normalizeCommandName(value: string): string {
   const parts = value.split("/").filter(Boolean);
-  const lastPart = parts.length > 0 ? parts[parts.length - 1] ?? value : value;
+  const lastPart = parts.length > 0 ? (parts[parts.length - 1] ?? value) : value;
   return lastPart.replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
 }
 
@@ -236,7 +239,7 @@ function unwrapWrapper(words: string[]): string[] {
 
 function hasRawShellWrappedFileRead(command: string): boolean {
   return /(?:^|[\s;&|])(?:bash|sh|zsh|fish|env)\s+[^\n;&|]*\b(?:cat|head|tail|sed|awk|less|more|nl|wc|cut|sort|uniq|od|strings|tac|xxd|bat|batcat)\b/i.test(
-    command
+    command,
   );
 }
 
@@ -245,7 +248,10 @@ function hasBashFileReader(command: string): boolean {
   return commandSegments(tokenizeShell(command)).some((segment) => {
     const words = unwrapWrapper(segment);
     const commandName = normalizeCommandName(words[0] ?? "");
-    if (shellWrapperCommands.has(commandName) && words.some((word) => fileReaderCommands.has(normalizeCommandName(word)))) {
+    if (
+      shellWrapperCommands.has(commandName) &&
+      words.some((word) => fileReaderCommands.has(normalizeCommandName(word)))
+    ) {
       return true;
     }
     return fileReaderCommands.has(commandName);
@@ -294,7 +300,8 @@ export default function readManyFilesLines(pi: ExtensionAPI) {
     label: "Read many file line ranges",
     description: "Read multiple filesystem files or specific line ranges in one tool call.",
     parameters: readManyFilesLinesSchema,
-    promptSnippet: "Read multiple files or specific line ranges from the current filesystem in one call",
+    promptSnippet:
+      "Read multiple files or specific line ranges from the current filesystem in one call",
     promptGuidelines: [
       `Prefer ${TOOL_NAME} over the normal read tool when reading files, especially when reading multiple files or line ranges.`,
       `Use ${TOOL_NAME} instead of bash commands like cat, head, tail, sed, awk, less, or more for viewing file contents.`,

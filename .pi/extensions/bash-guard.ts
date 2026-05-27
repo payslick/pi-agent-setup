@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ToolCallEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ToolCallEventResult,
+  ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
 type ToolResultPatch = {
@@ -10,8 +14,7 @@ type ToolResultPatch = {
 const WORKDIR_ERROR =
   "work only in the current dir, never use `cd ..`, `cd /`, `git -C`, or other directory-changing tricks";
 const PYTHON_ERROR = "never use ad hoc python: use jq to parse json, use bun to run js";
-const DEV_SERVER_ERROR =
-  "never run the dev server; use `bun scripts/find-port.ts --wait` instead";
+const DEV_SERVER_ERROR = "never run the dev server; use `bun scripts/find-port.ts --wait` instead";
 const EXTENSION_FAILURE_ERROR = "bash guard extension failed";
 const EXIT_CODE_ONE = "Exit code: 1";
 const EXIT_CODE_UNKNOWN = "Exit code: unknown";
@@ -202,12 +205,14 @@ function shellQuote(word: string): string {
 }
 
 function joinShellTokens(tokens: RebuiltShellToken[]): string {
-  return tokens.reduce((command, token) => {
-    if (token.text === "\n") return `${command.trimEnd()}\n`;
-    if (token.operator) return `${command.trimEnd()} ${token.text} `;
-    const separator = command && !command.endsWith(" ") && !command.endsWith("\n") ? " " : "";
-    return `${command}${separator}${shellQuote(token.text)}`;
-  }, "").trim();
+  return tokens
+    .reduce((command, token) => {
+      if (token.text === "\n") return `${command.trimEnd()}\n`;
+      if (token.operator) return `${command.trimEnd()} ${token.text} `;
+      const separator = command && !command.endsWith(" ") && !command.endsWith("\n") ? " " : "";
+      return `${command}${separator}${shellQuote(token.text)}`;
+    }, "")
+    .trim();
 }
 
 function rewriteGrepWords(words: string[]): string[] {
@@ -316,7 +321,10 @@ function rewriteFindWords(words: string[]): string[] {
       index += 2;
       continue;
     }
-    if ((word === "!" || word === "-not") && ["-name", "-iname", "-path", "-ipath"].includes(next)) {
+    if (
+      (word === "!" || word === "-not") &&
+      ["-name", "-iname", "-path", "-ipath"].includes(next)
+    ) {
       const pattern = words[index + 2] ?? "";
       if (!pattern) unsupportedFindArgument(`${word} ${next} needs a value`);
       pushFindGlob(rewritten, next, pattern, true);
@@ -340,7 +348,23 @@ function rewriteFindWords(words: string[]): string[] {
       index += 1;
       continue;
     }
-    if (["-print", "-true", "-a", "-and", "-o", "-or", "-H", "-P", "-xdev", "-mount", "-depth", "(", ")"].includes(word)) {
+    if (
+      [
+        "-print",
+        "-true",
+        "-a",
+        "-and",
+        "-o",
+        "-or",
+        "-H",
+        "-P",
+        "-xdev",
+        "-mount",
+        "-depth",
+        "(",
+        ")",
+      ].includes(word)
+    ) {
       index += 1;
       continue;
     }
@@ -393,19 +417,28 @@ function rewriteSearchSegment(words: string[]): SegmentRewriteResult {
     };
   }
   if (grepSearchCommands.has(first)) {
-    return { words: [...split.assignments, ...rewriteGrepWords(split.commandWords)], changed: true };
+    return {
+      words: [...split.assignments, ...rewriteGrepWords(split.commandWords)],
+      changed: true,
+    };
   }
   if (directSearchCommands.has(first)) {
     return { words: [...split.assignments, "rg", ...split.commandWords.slice(1)], changed: true };
   }
   if (first === "find") {
-    return { words: [...split.assignments, ...rewriteFindWords(split.commandWords)], changed: true };
+    return {
+      words: [...split.assignments, ...rewriteFindWords(split.commandWords)],
+      changed: true,
+    };
   }
   if (first === "fd" || first === "fdfind") {
     return { words: [...split.assignments, ...rewriteFdWords(split.commandWords)], changed: true };
   }
   if (first === "locate") {
-    return { words: [...split.assignments, ...rewriteLocateWords(split.commandWords)], changed: true };
+    return {
+      words: [...split.assignments, ...rewriteLocateWords(split.commandWords)],
+      changed: true,
+    };
   }
 
   return { words, changed: false };
@@ -474,7 +507,9 @@ function unwrapCommandWrapper(words: string[]): string[] {
   }
 
   if (first === "xargs") {
-    const commandIndex = runnableWords.findIndex((word, index) => index > 0 && isPythonCommand(word));
+    const commandIndex = runnableWords.findIndex(
+      (word, index) => index > 0 && isPythonCommand(word),
+    );
     return commandIndex === -1 ? runnableWords : runnableWords.slice(commandIndex);
   }
 
@@ -483,20 +518,22 @@ function unwrapCommandWrapper(words: string[]): string[] {
 
 function hasRawPythonTrick(command: string): boolean {
   return /(?:^|[\s;&|])(?:bash|sh|zsh|fish|env)\s+[^\n;&|]*\b(?:python\d*(?:\.\d+)?|pythonw|pypy\d?|py)\b/i.test(
-    command
+    command,
   );
 }
 
 function hasPythonUsage(command: string, tokens: ShellToken[]): boolean {
   return (
     hasRawPythonTrick(command) ||
-    commandSegments(tokens).some((segment) => isPythonCommand(unwrapCommandWrapper(segment)[0] ?? ""))
+    commandSegments(tokens).some((segment) =>
+      isPythonCommand(unwrapCommandWrapper(segment)[0] ?? ""),
+    )
   );
 }
 
 function hasRawDevServerTrick(command: string): boolean {
   return /(?:^|[\s;&|])(?:bash|sh|zsh|fish|env)\s+[^\n;&|]*(?:\b(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:dev|start|preview|serve)\b|\bnext\s+(?:dev|start)\b)/i.test(
-    command
+    command,
   );
 }
 
@@ -513,7 +550,8 @@ function hasDevServerUsage(command: string, tokens: ShellToken[]): boolean {
 
     if (first === "bun") {
       if (["dev", "start", "preview", "preview:watch"].includes(second)) return true;
-      if (second === "run" && ["dev", "start", "preview", "preview:watch"].includes(third)) return true;
+      if (second === "run" && ["dev", "start", "preview", "preview:watch"].includes(third))
+        return true;
       if (/^(?:\.\/)?scripts\/dev(?:\.ts|\.js)?$/.test(second)) return true;
       if (normalizedSecond === "next") return true;
     }
@@ -577,7 +615,11 @@ function hasDirectoryFlagViolation(tokens: ShellToken[]): boolean {
       const word = words[index] ?? "";
       const [flagName] = word.split("=", 1);
       if (pathOptionNames.has(flagName ?? word)) return true;
-      if (word.startsWith("--cwd=") || word.startsWith("--prefix=") || word.startsWith("--directory=")) {
+      if (
+        word.startsWith("--cwd=") ||
+        word.startsWith("--prefix=") ||
+        word.startsWith("--directory=")
+      ) {
         return true;
       }
     }
@@ -602,7 +644,11 @@ function hasUnsafePathUsage(tokens: ShellToken[]): boolean {
 export function analyzeBashCommand(command: string): RuleViolation | null {
   const tokens = shellTokenize(command);
 
-  if (hasRawDirectoryTrick(command) || hasDirectoryFlagViolation(tokens) || hasUnsafePathUsage(tokens)) {
+  if (
+    hasRawDirectoryTrick(command) ||
+    hasDirectoryFlagViolation(tokens) ||
+    hasUnsafePathUsage(tokens)
+  ) {
     return { rule: "workdir", detail: WORKDIR_ERROR };
   }
 
@@ -639,12 +685,15 @@ function patchBashResultContent(event: ToolResultEvent): ToolResultPatch | undef
   if (replacementCommand) {
     const firstTextIndex = content.findIndex((part) => part.type === "text");
     if (firstTextIndex === -1) {
-      content = [{ type: "text" as const, text: `${RG_REPLACEMENT_PREFIX}: ${replacementCommand}\n` }, ...content];
+      content = [
+        { type: "text" as const, text: `${RG_REPLACEMENT_PREFIX}: ${replacementCommand}\n` },
+        ...content,
+      ];
     } else {
       content = content.map((part, index) =>
         index === firstTextIndex && part.type === "text"
           ? { ...part, text: prefixRgReplacement(part.text, replacementCommand) }
-          : part
+          : part,
       );
     }
   }
@@ -660,7 +709,7 @@ function patchBashResultContent(event: ToolResultEvent): ToolResultPatch | undef
     content: content.map((part, index) =>
       index === lastTextIndex && part.type === "text"
         ? { ...part, text: appendUnknownExitCode(part.text) }
-        : part
+        : part,
     ),
   };
 }

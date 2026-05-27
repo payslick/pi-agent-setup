@@ -29,54 +29,70 @@ const citationFormatSchema = StringEnum(["numbered", "mla", "apa", "chicago"] as
 
 const webSearchSchema = Type.Object({
   query: Type.String({
-    description: "Focused web search query. Keep it concise; split complex research into multiple searches.",
+    description:
+      "Focused web search query. Keep it concise; split complex research into multiple searches.",
   }),
   searchDepth: Type.Optional(searchDepthSchema),
   maxResults: Type.Optional(
-    Type.Integer({ minimum: 0, maximum: 20, description: "Maximum ranked results to return. Default: 5." })
+    Type.Integer({
+      minimum: 0,
+      maximum: 20,
+      description: "Maximum ranked results to return. Default: 5.",
+    }),
   ),
   chunksPerSource: Type.Optional(
     Type.Integer({
       minimum: 1,
       maximum: 3,
-      description: "Relevant chunks per source when supported by searchDepth. Default from Tavily: 3.",
-    })
+      description:
+        "Relevant chunks per source when supported by searchDepth. Default from Tavily: 3.",
+    }),
   ),
   topic: Type.Optional(topicSchema),
   answer: Type.Optional(answerSchema),
   includeRawContent: Type.Optional(
-    Type.Boolean({ description: "Include raw page content in search results. Prefer web_extract instead." })
+    Type.Boolean({
+      description: "Include raw page content in search results. Prefer web_extract instead.",
+    }),
   ),
   includeImages: Type.Optional(Type.Boolean({ description: "Include query-related images." })),
   includeImageDescriptions: Type.Optional(
-    Type.Boolean({ description: "Include image descriptions when images are included." })
+    Type.Boolean({ description: "Include image descriptions when images are included." }),
   ),
   includeDomains: Type.Optional(
     Type.Array(Type.String(), {
       maxItems: 20,
       description: "Only return results from these domains, e.g. ['docs.example.com'].",
-    })
+    }),
   ),
   excludeDomains: Type.Optional(
     Type.Array(Type.String(), {
       maxItems: 20,
       description: "Exclude these domains from results.",
-    })
+    }),
   ),
   timeRange: Type.Optional(timeRangeSchema),
   days: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: 3650, description: "Number of days back to search, mainly for news." })
+    Type.Integer({
+      minimum: 1,
+      maximum: 3650,
+      description: "Number of days back to search, mainly for news.",
+    }),
   ),
   startDate: Type.Optional(Type.String({ description: "Start date filter in YYYY-MM-DD format." })),
   endDate: Type.Optional(Type.String({ description: "End date filter in YYYY-MM-DD format." })),
-  country: Type.Optional(Type.String({ description: "Country filter, e.g. united states, germany, japan." })),
+  country: Type.Optional(
+    Type.String({ description: "Country filter, e.g. united states, germany, japan." }),
+  ),
   autoParameters: Type.Optional(
     Type.Boolean({
       description:
         "Let Tavily infer some parameters. If true and searchDepth is omitted, Tavily may choose advanced and spend more credits.",
-    })
+    }),
   ),
-  exactMatch: Type.Optional(Type.Boolean({ description: "Require exact query phrase matching where supported." })),
+  exactMatch: Type.Optional(
+    Type.Boolean({ description: "Require exact query phrase matching where supported." }),
+  ),
 });
 
 const webExtractSchema = Type.Object({
@@ -86,20 +102,29 @@ const webExtractSchema = Type.Object({
     description: "URLs to extract. Tavily supports up to 20 URLs per request.",
   }),
   query: Type.Optional(
-    Type.String({ description: "Intent/query used to rerank extracted chunks. Strongly recommended for long pages." })
+    Type.String({
+      description:
+        "Intent/query used to rerank extracted chunks. Strongly recommended for long pages.",
+    }),
   ),
   chunksPerSource: Type.Optional(
     Type.Integer({
       minimum: 1,
       maximum: 5,
       description: "Relevant chunks per URL. Requires query. Default from Tavily: 3.",
-    })
+    }),
   ),
   extractDepth: Type.Optional(extractDepthSchema),
   format: Type.Optional(extractFormatSchema),
-  includeImages: Type.Optional(Type.Boolean({ description: "Include image URLs extracted from pages." })),
+  includeImages: Type.Optional(
+    Type.Boolean({ description: "Include image URLs extracted from pages." }),
+  ),
   timeoutSeconds: Type.Optional(
-    Type.Integer({ minimum: 1, maximum: 60, description: "Maximum Tavily extraction timeout in seconds." })
+    Type.Integer({
+      minimum: 1,
+      maximum: 60,
+      description: "Maximum Tavily extraction timeout in seconds.",
+    }),
   ),
 });
 
@@ -111,13 +136,21 @@ const webResearchSchema = Type.Object({
   model: Type.Optional(researchModelSchema),
   citationFormat: Type.Optional(citationFormatSchema),
   waitForCompletion: Type.Optional(
-    Type.Boolean({ description: "Poll until the research task completes. Default: true." })
+    Type.Boolean({ description: "Poll until the research task completes. Default: true." }),
   ),
   pollIntervalSeconds: Type.Optional(
-    Type.Integer({ minimum: 2, maximum: 30, description: "Polling interval when waiting. Default: 5." })
+    Type.Integer({
+      minimum: 2,
+      maximum: 30,
+      description: "Polling interval when waiting. Default: 5.",
+    }),
   ),
   timeoutSeconds: Type.Optional(
-    Type.Integer({ minimum: 10, maximum: 600, description: "Maximum time to wait for completion. Default: 180." })
+    Type.Integer({
+      minimum: 10,
+      maximum: 600,
+      description: "Maximum time to wait for completion. Default: 180.",
+    }),
   ),
 });
 
@@ -224,7 +257,9 @@ function getTavilyApiKey(): string {
 }
 
 function asRecord(value: unknown): JsonObject | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : undefined;
 }
 
 function stringifyUnknown(value: unknown): string {
@@ -246,7 +281,11 @@ function errorMessageFromPayload(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-async function tavilyRequest<T>(endpoint: string, body: JsonObject | undefined, signal?: AbortSignal): Promise<T> {
+async function tavilyRequest<T>(
+  endpoint: string,
+  body: JsonObject | undefined,
+  signal?: AbortSignal,
+): Promise<T> {
   const response = await fetch(`${TAVILY_BASE_URL}${endpoint}`, {
     method: body ? "POST" : "GET",
     headers: {
@@ -269,7 +308,9 @@ async function tavilyRequest<T>(endpoint: string, body: JsonObject | undefined, 
 
   if (!response.ok) {
     const message = errorMessageFromPayload(payload, text || response.statusText);
-    throw new Error(`Tavily ${endpoint} failed (${response.status} ${response.statusText}): ${message}`);
+    throw new Error(
+      `Tavily ${endpoint} failed (${response.status} ${response.statusText}): ${message}`,
+    );
   }
 
   return payload as T;
@@ -316,7 +357,9 @@ function buildSearchBody(params: WebSearchInput): JsonObject {
 
 function buildExtractBody(params: WebExtractInput): JsonObject {
   if (params.chunksPerSource !== undefined && !params.query?.trim()) {
-    throw new Error("web_extract chunksPerSource requires query so Tavily can rerank extracted chunks.");
+    throw new Error(
+      "web_extract chunksPerSource requires query so Tavily can rerank extracted chunks.",
+    );
   }
 
   return withoutUndefined({
@@ -341,17 +384,20 @@ function buildResearchBody(params: WebResearchInput): JsonObject {
 
 function formatUsage(usage: TavilyUsage | undefined): string {
   if (!usage) return "";
-  const credits = typeof usage.credits === "number" ? `credits: ${usage.credits}` : stringifyUnknown(usage);
+  const credits =
+    typeof usage.credits === "number" ? `credits: ${usage.credits}` : stringifyUnknown(usage);
   return `Usage: ${credits}`;
 }
 
 function formatSearchResponse(response: TavilySearchResponse): string {
   const lines: string[] = ["# Tavily web_search"];
   if (response.query) lines.push(`Query: ${response.query}`);
-  if (typeof response.response_time === "number") lines.push(`Response time: ${response.response_time}s`);
+  if (typeof response.response_time === "number")
+    lines.push(`Response time: ${response.response_time}s`);
   const usage = formatUsage(response.usage);
   if (usage) lines.push(usage);
-  if (response.auto_parameters) lines.push(`Auto parameters: ${stringifyUnknown(response.auto_parameters)}`);
+  if (response.auto_parameters)
+    lines.push(`Auto parameters: ${stringifyUnknown(response.auto_parameters)}`);
 
   if (response.answer?.trim()) {
     lines.push("", "## Answer", response.answer.trim());
@@ -371,7 +417,11 @@ function formatSearchResponse(response: TavilySearchResponse): string {
   }
 
   if (response.images?.length) {
-    lines.push("", `## Query images (${response.images.length})`, stringifyUnknown(response.images));
+    lines.push(
+      "",
+      `## Query images (${response.images.length})`,
+      stringifyUnknown(response.images),
+    );
   }
 
   if (response.request_id) lines.push("", `Request ID: ${response.request_id}`);
@@ -380,7 +430,8 @@ function formatSearchResponse(response: TavilySearchResponse): string {
 
 function formatExtractResponse(response: TavilyExtractResponse): string {
   const lines: string[] = ["# Tavily web_extract"];
-  if (typeof response.response_time === "number") lines.push(`Response time: ${response.response_time}s`);
+  if (typeof response.response_time === "number")
+    lines.push(`Response time: ${response.response_time}s`);
   const usage = formatUsage(response.usage);
   if (usage) lines.push(usage);
 
@@ -415,7 +466,8 @@ function formatResearchResponse(response: TavilyResearchResponse): string {
   if (response.request_id) lines.push(`Request ID: ${response.request_id}`);
   if (response.status) lines.push(`Status: ${response.status}`);
   if (response.model) lines.push(`Model: ${response.model}`);
-  if (typeof response.response_time === "number") lines.push(`Response time: ${response.response_time}s`);
+  if (typeof response.response_time === "number")
+    lines.push(`Response time: ${response.response_time}s`);
   const usage = formatUsage(response.usage);
   if (usage) lines.push(usage);
 
@@ -438,7 +490,11 @@ function formatResearchResponse(response: TavilyResearchResponse): string {
   return lines.join("\n");
 }
 
-async function writeFullOutput(ctx: ExtensionContext, operation: string, payload: unknown): Promise<string> {
+async function writeFullOutput(
+  ctx: ExtensionContext,
+  operation: string,
+  payload: unknown,
+): Promise<string> {
   const outputDir = path.join(ctx.cwd, TMP_DIR);
   await mkdir(outputDir, { recursive: true });
   const filename = `${Date.now()}-${randomUUID()}-${operation}.json`;
@@ -454,7 +510,7 @@ async function finalizeResponse(
   operation: string,
   text: string,
   rawResponse: unknown,
-  details: TavilyToolDetails
+  details: TavilyToolDetails,
 ) {
   const truncation = truncateHead(text, {
     maxLines: DEFAULT_MAX_LINES,
@@ -466,7 +522,10 @@ async function finalizeResponse(
 
   if (truncation.truncated) {
     finalDetails.truncation = truncation;
-    finalDetails.fullOutputPath = await writeFullOutput(ctx, operation, { formatted: text, response: rawResponse });
+    finalDetails.fullOutputPath = await writeFullOutput(ctx, operation, {
+      formatted: text,
+      response: rawResponse,
+    });
     output += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`;
     output += ` (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).`;
     output += ` Full formatted output and raw Tavily response saved to: ${finalDetails.fullOutputPath}]`;
@@ -503,14 +562,22 @@ async function pollResearch(
   requestId: string,
   timeoutSeconds: number,
   pollIntervalSeconds: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<TavilyResearchResponse> {
   const deadline = Date.now() + timeoutSeconds * 1000;
-  let latest = await tavilyRequest<TavilyResearchResponse>(`/research/${encodeURIComponent(requestId)}`, undefined, signal);
+  let latest = await tavilyRequest<TavilyResearchResponse>(
+    `/research/${encodeURIComponent(requestId)}`,
+    undefined,
+    signal,
+  );
 
   while (latest.status !== "completed" && latest.status !== "failed" && Date.now() < deadline) {
     await sleep(pollIntervalSeconds * 1000, signal);
-    latest = await tavilyRequest<TavilyResearchResponse>(`/research/${encodeURIComponent(requestId)}`, undefined, signal);
+    latest = await tavilyRequest<TavilyResearchResponse>(
+      `/research/${encodeURIComponent(requestId)}`,
+      undefined,
+      signal,
+    );
   }
 
   return latest;
@@ -584,7 +651,12 @@ export default function (pi: ExtensionAPI) {
 
       let response = initial;
       if (waitForCompletion && requestId) {
-        response = await pollResearch(requestId, params.timeoutSeconds ?? 180, params.pollIntervalSeconds ?? 5, signal);
+        response = await pollResearch(
+          requestId,
+          params.timeoutSeconds ?? 180,
+          params.pollIntervalSeconds ?? 5,
+          signal,
+        );
         if (response.status !== "completed" && response.status !== "failed") {
           response = {
             ...response,
@@ -608,7 +680,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_research_status",
     label: "Web Research Status",
-    description: "Poll an existing Tavily research task by request_id. Requires TAVILY_API_KEY or TAVILY_API.",
+    description:
+      "Poll an existing Tavily research task by request_id. Requires TAVILY_API_KEY or TAVILY_API.",
     promptSnippet: "Check the status/result of an existing Tavily research task.",
     promptGuidelines: [
       "Use web_research_status when web_research returns a pending request_id or times out before completion.",
@@ -618,7 +691,7 @@ export default function (pi: ExtensionAPI) {
       const response = await tavilyRequest<TavilyResearchResponse>(
         `/research/${encodeURIComponent(params.requestId)}`,
         undefined,
-        signal
+        signal,
       );
       const text = formatResearchResponse(response);
       return finalizeResponse(ctx, "web-research-status", text, response, {
@@ -635,6 +708,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) return;
     if (process.env.TAVILY_API_KEY || process.env.TAVILY_API || process.env.TAVILY_KEY) return;
-    ctx.ui.notify(`${EXTENSION_NAME}: set TAVILY_API_KEY or TAVILY_API to enable web tools.`, "warning");
+    ctx.ui.notify(
+      `${EXTENSION_NAME}: set TAVILY_API_KEY or TAVILY_API to enable web tools.`,
+      "warning",
+    );
   });
 }

@@ -21,9 +21,18 @@ let refreshTimer: NodeJS.Timeout | undefined;
 let refreshInFlight = false;
 let lastStatusText: string | undefined;
 
-function run(command: string, args: string[], cwd: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandResult> {
+function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const timeout = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
@@ -76,8 +85,19 @@ async function findPr(cwd: string, branch: string): Promise<PullRequestInfo | nu
 
   const list = await run(
     "gh",
-    ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url,headRefName", "--limit", "1"],
-    cwd
+    [
+      "pr",
+      "list",
+      "--head",
+      branch,
+      "--state",
+      "open",
+      "--json",
+      "number,url,headRefName",
+      "--limit",
+      "1",
+    ],
+    cwd,
   );
   if (list.code !== 0) return null;
   return parsePrJson(list.stdout);
