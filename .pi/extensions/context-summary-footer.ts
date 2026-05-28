@@ -30,11 +30,17 @@ interface CommandResult {
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
+const BRIGHT_WHITE = `${ESC}[97m`;
+const FG_RESET = `${ESC}[39m`;
 const CSI_ANSI_RE = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g");
 const OSC_ANSI_RE = new RegExp(`${ESC}\\].*?(?:${BEL}|${ESC}\\\\)`, "g");
 
 function stripAnsi(text: string): string {
   return text.replace(CSI_ANSI_RE, "").replace(OSC_ANSI_RE, "");
+}
+
+function brightWhite(text: string): string {
+  return `${BRIGHT_WHITE}${text}${FG_RESET}`;
 }
 
 function oneLine(text: string): string {
@@ -247,18 +253,27 @@ function installFooter(ctx: ExtensionContext): void {
           statusEntries.find(([key]) => key === CODEX_STATUS_KEY)?.[1] ?? "",
         );
         const vimStatus = oneLine(statusEntries.find(([key]) => key === VIM_STATUS_KEY)?.[1] ?? "");
-        const statsLeft = [
+        const contextSize = `${percent}/${formatTokens(window)}`;
+        const primaryStats = [
           `↑${formatTokens(input)}`,
           `↓${formatTokens(output)}`,
           `$${cost.toFixed(3)}`,
-          `${percent}/${formatTokens(window)}`,
-          codexStatus || undefined,
-        ]
+        ];
+        const statsLeftText = [...primaryStats, contextSize, codexStatus || undefined]
           .filter(Boolean)
           .join(" ");
+        const statsLeft = [
+          theme.fg("dim", primaryStats.join(" ")),
+          brightWhite(contextSize),
+          codexStatus ? theme.fg("dim", codexStatus) : undefined,
+        ]
+          .filter(Boolean)
+          .join(theme.fg("dim", " "));
         const model = ctx.model?.id || "no-model";
-        const pad = " ".repeat(Math.max(1, width - visibleWidth(statsLeft) - visibleWidth(model)));
-        const statsLine = truncateToWidth(theme.fg("dim", statsLeft + pad + model), width);
+        const pad = " ".repeat(
+          Math.max(1, width - visibleWidth(statsLeftText) - visibleWidth(model)),
+        );
+        const statsLine = truncateToWidth(`${statsLeft}${theme.fg("dim", pad + model)}`, width);
 
         const lines = [
           truncateToWidth(theme.fg("accent", summaryText), width, theme.fg("dim", "...")),

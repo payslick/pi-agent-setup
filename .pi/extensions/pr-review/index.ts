@@ -331,6 +331,46 @@ interface LaneAgentResult {
   artifactFiles?: readonly string[];
 }
 
+interface AfterReviewCodeExcerpt {
+  commentId: string;
+  path: string;
+  line?: number;
+  startLine?: number;
+  endLine?: number;
+  content?: string;
+  error?: string;
+}
+
+interface AfterReviewBranchCheck {
+  currentBranch?: string;
+  prBranch?: string;
+  matches: boolean;
+}
+
+export interface AfterReviewRuleWorkflowTask {
+  id: string;
+  commentId: string;
+  pattern: PolicyHint["pattern"];
+  instruction: string;
+  location: string;
+  ruleKind: DesignRuleProposal["implementation"];
+  targetPathHint: string;
+}
+
+export interface AfterReviewIssueGroup {
+  id: string;
+  issueType: string;
+  priority: AfterReviewAnalysisResult["analyses"][number]["priority"];
+  commentIds: string[];
+  locations: string[];
+  summary: string;
+}
+
+export interface AfterReviewProcessPlan {
+  ruleTasks: AfterReviewRuleWorkflowTask[];
+  commentGroups: AfterReviewIssueGroup[];
+}
+
 type LaneArtifactWriter = (fileName: string, content: string) => Promise<void>;
 
 let lastStatus: LastStatus = {};
@@ -2338,8 +2378,12 @@ async function runReviewAfterCommand(
   }
 
   const policyHints = extractPolicyHints(comments);
-  const preferEslintRules = await hasDevEslintDirectory(ctx.cwd);
-  const agentOutput = await runReviewAfterAgent(pi, ctx, prData.metadata, comments, {
+  const [branchCheck, codeExcerpts, preferEslintRules] = await Promise.all([
+    buildReviewAfterBranchCheck(pi, ctx, prData.metadata),
+    collectReviewAfterCodeExcerpts(ctx, comments),
+    hasDevEslintDirectory(ctx.cwd),
+  ]);
+  const agentOutput = await runReviewAfterAgent(pi, ctx, prData.metadata, comments, codeExcerpts, {
     preferEslintRules,
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -2365,6 +2409,13 @@ async function runReviewAfterCommand(
     inferNewLaneProposals(policyHints),
   );
   const designRuleProposals = inferDesignRuleProposals(policyHints, { preferEslintRules });
+  const processPlan = buildReviewAfterProcessPlan({
+    comments,
+    analyses,
+    policyHints,
+    designRuleProposals,
+    preferEslintRules,
+  });
 
   const result: AfterReviewAnalysisResult = {
     prNumber,
@@ -2378,7 +2429,14 @@ async function runReviewAfterCommand(
     policyHints,
   };
 
-  const report = renderAfterReviewReport(prData.metadata, result, includeResolved);
+  const report = renderAfterReviewReport(
+    prData.metadata,
+    result,
+    includeResolved,
+    processPlan,
+    codeExcerpts,
+    branchCheck,
+  );
   publishReviewReport(pi, report);
   setStatus(ctx, "✅:post-review");
   showWidget(ctx, [
@@ -2386,7 +2444,393 @@ async function runReviewAfterCommand(
     `Policy-style comments: ${result.policyHints.length}.`,
     `Lane improvements: ${result.laneImprovements.length}. New lane ideas: ${result.newLaneProposals.length}.`,
     `Design rule proposals: ${result.designRuleProposals.length}.`,
+    `Rule tasks: ${processPlan.ruleTasks.length}. Comment groups: ${processPlan.commentGroups.length}.`,
   ]);
+  await promptReviewAfterNextAction(
+    pi,
+    ctx,
+    prData.metadata,
+    result,
+    processPlan,
+    codeExcerpts,
+    prData.files.map((file) => file.path),
+    branchCheck,
+  );
+}
+
+const REVIEW_AFTER_WORKFLOW_CHOICE = "start post-review workflow";
+const REVIEW_AFTER_FIX_CHOICE = "fix reviewer issues";
+const REVIEW_AFTER_LANES_CHOICE = "update review lanes";
+const REVIEW_AFTER_RULES_CHOICE = "update design/eslint rules";
+
+export function buildReviewAfterNextActionOptions(
+  analysis: AfterReviewAnalysisResult,
+  processPlan?: AfterReviewProcessPlan,
+): string[] {
+  const hasProcessWork = Boolean(
+    processPlan?.ruleTasks.length || processPlan?.commentGroups.length,
+  );
+  const options = hasProcessWork ? [REVIEW_AFTER_WORKFLOW_CHOICE] : [REVIEW_AFTER_FIX_CHOICE];
+  if (processPlan?.commentGroups.length && !options.includes(REVIEW_AFTER_FIX_CHOICE))
+    options.push(REVIEW_AFTER_FIX_CHOICE);
+  if (analysis.laneImprovements.length || analysis.newLaneProposals.length)
+    options.push(REVIEW_AFTER_LANES_CHOICE);
+  if (analysis.designRuleProposals.length || processPlan?.ruleTasks.length)
+    options.push(REVIEW_AFTER_RULES_CHOICE);
+  return options;
+}
+
+async function promptReviewAfterNextAction(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  pr: PRMetadata,
+  analysis: AfterReviewAnalysisResult,
+  processPlan: AfterReviewProcessPlan,
+  codeExcerpts: readonly AfterReviewCodeExcerpt[],
+  changedFiles: readonly string[],
+  branchCheck: AfterReviewBranchCheck,
+): Promise<void> {
+  if (!branchCheck.matches) {
+    const message = `Current branch (${branchCheck.currentBranch || "unknown"}) does not match PR branch (${branchCheck.prBranch || "unknown"}). Switch to the PR branch/worktree before applying post-review fixes.`;
+    if (ctx.hasUI) ctx.ui.notify(message, "warning");
+    showWidget(ctx, ["Post-review workflow paused:", message]);
+    return;
+  }
+
+  const hasProcessWork = Boolean(processPlan.ruleTasks.length || processPlan.commentGroups.length);
+  if (hasProcessWork && pi.sendUserMessage) {
+    const prompt = buildReviewAfterNextActionPrompt(
+      REVIEW_AFTER_WORKFLOW_CHOICE,
+      pr,
+      analysis,
+      processPlan,
+      codeExcerpts,
+      changedFiles,
+      branchCheck,
+    );
+    await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    return;
+  }
+
+  if (!ctx.hasUI || !ctx.ui.select) return;
+  const options = buildReviewAfterNextActionOptions(analysis, processPlan);
+  const choice = await ctx.ui.select(
+    "Post-review analysis complete. What would you like to do? (Esc to type something else)",
+    options,
+  );
+  if (!choice) return;
+  const prompt = buildReviewAfterNextActionPrompt(
+    choice,
+    pr,
+    analysis,
+    processPlan,
+    codeExcerpts,
+    changedFiles,
+    branchCheck,
+  );
+  if (pi.sendUserMessage) {
+    await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    return;
+  }
+  showWidget(ctx, ["Selected post-review action:", choice, "", prompt]);
+}
+
+export function buildReviewAfterNextActionPrompt(
+  choice: string,
+  pr: PRMetadata,
+  analysis: AfterReviewAnalysisResult,
+  processPlan: AfterReviewProcessPlan = { ruleTasks: [], commentGroups: [] },
+  codeExcerpts: readonly AfterReviewCodeExcerpt[] = [],
+  changedFiles: readonly string[] = [],
+  branchCheck: AfterReviewBranchCheck = { matches: true },
+): string {
+  const target = `PR #${analysis.prNumber || pr.ref.number} (${pr.title})`;
+  const contextLines = buildReviewAfterPromptContextLines(
+    analysis,
+    processPlan,
+    changedFiles,
+    branchCheck,
+  );
+
+  if (choice === REVIEW_AFTER_WORKFLOW_CHOICE) {
+    return [
+      `For ${target}, run the full /pr-review-process follow-up workflow.`,
+      ...contextLines,
+      "Use the rendered report and the code excerpts below as the source of truth before editing.",
+      "Ask the user at most once for clarification across all non-rule comment groups before spawning agents; if no clarification is needed, proceed.",
+      "",
+      "## Rule comments (NEVER / ALWAYS)",
+      ...formatReviewAfterPromptBullets(processPlan.ruleTasks, formatRuleWorkflowTask),
+      "",
+      "For each rule comment, spawn one high-effort agent that must:",
+      "1. Create a rule for this issue. Prefer an ESLint rule when the pattern is syntactic; otherwise add a design rule.",
+      "2. Run the new rule on the file/line from the comment and ensure it fails on the original issue. If it does not fail, rewrite the rule until it does.",
+      "3. Fix the underlying issue, rerun the rule on that file, and make the rule pass. If fixing fails more than 3 times, refine the rule and repeat step 2.",
+      "4. Run the rule on all files changed in this PR and fix every changed-file violation.",
+      "5. Reply to the original PR comment with the new rule name and how many other changed-file locations were found/fixed.",
+      "6. Run the rule on the entire codebase. If it fails in many unrelated places, suggest a separate PR fixing only that rule and start a new agent in a new worktree for it without waiting for completion.",
+      "",
+      "## Non-rule comment groups",
+      ...formatReviewAfterPromptBullets(processPlan.commentGroups, formatIssueGroupTask),
+      "",
+      "Spawn one high-effort agent per non-rule group. Each group agent may fix code, ask for clarification, or explain why the comment is not relevant.",
+      "Show one final table with columns: group, comments, issue type, action, status, files changed.",
+      "Edit only files needed for the PR comments and any rules created for all-caps instructions.",
+      "",
+      "## Related code excerpts",
+      ...formatCodeExcerptPromptLines(codeExcerpts),
+    ].join("\n");
+  }
+
+  if (choice === REVIEW_AFTER_LANES_CHOICE) {
+    return [
+      `For ${target}, update review lanes from high-confidence /pr-review-process suggestions.`,
+      ...contextLines,
+      "Use the rendered /pr-review-process report in this session as the source of truth. If a saved report path is available, read it first.",
+      "Existing lane improvements:",
+      ...formatReviewAfterPromptBullets(
+        analysis.laneImprovements,
+        (item) => `${item.laneId}: ${item.proposedImprovement}`,
+      ),
+      "New lane proposals:",
+      ...formatReviewAfterPromptBullets(
+        analysis.newLaneProposals,
+        (proposal) => `${proposal.proposedLaneId} (${proposal.title}): ${proposal.focus}`,
+      ),
+      "Apply existing-lane improvements to the relevant lane review rules and add new lanes only when the evidence is sufficient.",
+      "Edit only review lane/review extension files and tests needed for those lane changes.",
+    ].join("\n");
+  }
+
+  if (choice === REVIEW_AFTER_RULES_CHOICE) {
+    return [
+      `For ${target}, implement design-rule/ESLint-rule proposals from /pr-review-process.`,
+      ...contextLines,
+      "Use the rendered /pr-review-process report and code excerpts in this session as the source of truth.",
+      "Rule workflow tasks:",
+      ...formatReviewAfterPromptBullets(processPlan.ruleTasks, formatRuleWorkflowTask),
+      "Rule proposals:",
+      ...formatReviewAfterPromptBullets(
+        analysis.designRuleProposals,
+        (proposal) =>
+          `${proposal.ruleId} (${proposal.title}) -> ${proposal.targetPath} [${proposal.implementation}]`,
+      ),
+      "For each rule, prove it fails on the commented file first, then fix the underlying issue and prove it passes.",
+      "Run each new rule on all PR-changed files and then the whole codebase; handle widespread unrelated failures in a separate worktree/agent.",
+      "Prefer ESLint when a proposal uses eslint-rule; otherwise update design rules.",
+      "Edit only rule files, tests, and files needed to fix violations from the rule workflow.",
+    ].join("\n");
+  }
+
+  return [
+    `For ${target}, fix reviewer-requested issues from /pr-review-process that do not require new rules.`,
+    ...contextLines,
+    "Use the rendered /pr-review-process report and related code excerpts as the source of truth.",
+    "Non-rule comment groups:",
+    ...formatReviewAfterPromptBullets(processPlan.commentGroups, formatIssueGroupTask),
+    "Ask the user at most once for clarification across all groups before spawning agents.",
+    "Spawn one high-effort agent per group; each may fix code, ask for clarification, or explain why the comment is not relevant.",
+    "Do not update review lanes or rules unless separately requested.",
+  ].join("\n");
+}
+
+function buildReviewAfterPromptContextLines(
+  analysis: AfterReviewAnalysisResult,
+  processPlan: AfterReviewProcessPlan = { ruleTasks: [], commentGroups: [] },
+  changedFiles: readonly string[] = [],
+  branchCheck: AfterReviewBranchCheck = { matches: true },
+): string[] {
+  return [
+    `Branch check: current=${branchCheck.currentBranch || "unknown"}, PR=${branchCheck.prBranch || "unknown"}, matches=${branchCheck.matches ? "yes" : "no"}.`,
+    `Post-review comments analyzed: ${analysis.commentsAnalyzed} across ${analysis.threadsAnalyzed} thread(s).`,
+    `Rule tasks: ${processPlan.ruleTasks.length}. Non-rule groups: ${processPlan.commentGroups.length}.`,
+    `Lane improvements: ${analysis.laneImprovements.length}. New lane proposals: ${analysis.newLaneProposals.length}. Design/eslint rule proposals: ${analysis.designRuleProposals.length}.`,
+    `Changed files: ${changedFiles.length ? changedFiles.join(", ") : "not available"}.`,
+  ];
+}
+
+function formatReviewAfterPromptBullets<T>(
+  items: readonly T[],
+  render: (item: T) => string,
+  limit = 12,
+): string[] {
+  if (!items.length) return ["- none"];
+  const lines = items.slice(0, limit).map((item) => `- ${render(item)}`);
+  const omitted = items.length - limit;
+  if (omitted > 0) lines.push(`- ... ${omitted} more`);
+  return lines;
+}
+
+function formatRuleWorkflowTask(task: AfterReviewRuleWorkflowTask): string {
+  return `${task.id}: ${task.pattern} ${task.instruction} @ ${task.location}; ${task.ruleKind} target ${task.targetPathHint}`;
+}
+
+function formatIssueGroupTask(group: AfterReviewIssueGroup): string {
+  return `${group.id}: ${group.issueType} (${group.priority}) comments=${group.commentIds.join(", ")} locations=${group.locations.join(", ") || "general"} :: ${group.summary}`;
+}
+
+function formatCodeExcerptPromptLines(excerpts: readonly AfterReviewCodeExcerpt[]): string[] {
+  if (!excerpts.length) return ["No line-specific code excerpts were available."];
+  return excerpts.flatMap((excerpt) => [
+    `### ${excerpt.commentId} ${excerpt.path}${excerpt.line ? `:${excerpt.line}` : ""}`,
+    excerpt.error ? `Could not read code: ${excerpt.error}` : "```",
+    ...(excerpt.error ? [] : [excerpt.content || "(empty excerpt)", "```"]),
+  ]);
+}
+
+async function buildReviewAfterBranchCheck(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  pr: PRMetadata,
+): Promise<AfterReviewBranchCheck> {
+  const result = await pi.exec("git", ["branch", "--show-current"], {
+    cwd: ctx.cwd,
+    signal: ctx.signal,
+    timeout: 10_000,
+  });
+  const currentBranch = result.code === 0 ? result.stdout.trim() || undefined : undefined;
+  const prBranch = pr.head.ref || undefined;
+  return {
+    currentBranch,
+    prBranch,
+    matches: Boolean(currentBranch && prBranch && currentBranch === prBranch),
+  };
+}
+
+async function collectReviewAfterCodeExcerpts(
+  ctx: ExtensionCommandContext,
+  comments: readonly ReviewComment[],
+): Promise<AfterReviewCodeExcerpt[]> {
+  const excerpts: AfterReviewCodeExcerpt[] = [];
+  for (const comment of comments.slice(0, 120)) {
+    if (!comment.path) continue;
+    try {
+      const content = await readProjectTextFile(ctx, comment.path);
+      excerpts.push(buildReviewAfterCodeExcerpt(comment, content));
+    } catch (error) {
+      excerpts.push({
+        commentId: comment.id,
+        path: comment.path,
+        line: comment.line,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return excerpts;
+}
+
+function buildReviewAfterCodeExcerpt(
+  comment: ReviewComment,
+  fileContent: string,
+): AfterReviewCodeExcerpt {
+  const lines = fileContent.split(/\r?\n/);
+  const anchor = comment.line && comment.line > 0 ? comment.line : 1;
+  const startLine = Math.max(1, anchor - 8);
+  const endLine = Math.min(lines.length, anchor + 8);
+  const content = lines
+    .slice(startLine - 1, endLine)
+    .map((line, index) => `${startLine + index}: ${line}`)
+    .join("\n");
+  return {
+    commentId: comment.id,
+    path: comment.path || "",
+    line: comment.line,
+    startLine,
+    endLine,
+    content,
+  };
+}
+
+export function buildReviewAfterProcessPlan(input: {
+  comments: readonly ReviewComment[];
+  analyses: readonly AfterReviewAnalysisResult["analyses"][number][];
+  policyHints: readonly PolicyHint[];
+  designRuleProposals?: readonly DesignRuleProposal[];
+  preferEslintRules?: boolean;
+}): AfterReviewProcessPlan {
+  const commentsById = new Map(input.comments.map((comment) => [comment.id, comment]));
+  const proposalByCommentId = new Map<string, DesignRuleProposal>();
+  for (const proposal of input.designRuleProposals ?? []) {
+    for (const commentId of proposal.evidenceCommentIds)
+      proposalByCommentId.set(commentId, proposal);
+  }
+
+  const ruleTasks = input.policyHints
+    .filter(
+      (hint) => hint.confidence >= 0.8 && (hint.pattern === "NEVER" || hint.pattern === "ALWAYS"),
+    )
+    .map((hint): AfterReviewRuleWorkflowTask => {
+      const comment = commentsById.get(hint.commentId);
+      const proposal = proposalByCommentId.get(hint.commentId);
+      const fallbackRuleId = `review-pr-review-${stableId(hint.rawText.slice(0, 60))}`;
+      const ruleKind =
+        proposal?.implementation ?? (input.preferEslintRules ? "eslint-rule" : "design-rule");
+      return {
+        id: `rule-${stableId(`${hint.commentId}:${hint.rawText}`)}`,
+        commentId: hint.commentId,
+        pattern: hint.pattern,
+        instruction: hint.rawText.replace(/\s+/g, " ").trim(),
+        location: formatReviewAfterCommentLocation(comment),
+        ruleKind,
+        targetPathHint:
+          proposal?.targetPath ??
+          (ruleKind === "eslint-rule"
+            ? `dev/eslint/rules/${fallbackRuleId}.ts`
+            : `.pi/design-rules/${fallbackRuleId}.ts`),
+      };
+    });
+  const ruleCommentIds = new Set(ruleTasks.map((task) => task.commentId));
+
+  const groupsByType = new Map<string, AfterReviewIssueGroup>();
+  for (const analysis of input.analyses) {
+    if (ruleCommentIds.has(analysis.commentId)) continue;
+    const comment = commentsById.get(analysis.commentId);
+    const issueType = analysis.theme || inferCommentTheme(comment?.body ?? analysis.summary);
+    const key =
+      issueType
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "review-comment";
+    const existing = groupsByType.get(key);
+    if (existing) {
+      existing.commentIds.push(analysis.commentId);
+      const location = formatReviewAfterCommentLocation(comment);
+      if (location !== "general" && !existing.locations.includes(location))
+        existing.locations.push(location);
+      if (!existing.summary.includes(analysis.summary)) existing.summary += `; ${analysis.summary}`;
+      existing.priority = higherReviewAfterPriority(existing.priority, analysis.priority);
+      continue;
+    }
+    const location = formatReviewAfterCommentLocation(comment);
+    groupsByType.set(key, {
+      id: `group-${stableId(`${key}:${analysis.commentId}`)}`,
+      issueType,
+      priority: analysis.priority,
+      commentIds: [analysis.commentId],
+      locations: location === "general" ? [] : [location],
+      summary: analysis.summary,
+    });
+  }
+
+  return { ruleTasks, commentGroups: [...groupsByType.values()] };
+}
+
+function higherReviewAfterPriority(
+  current: AfterReviewIssueGroup["priority"],
+  next: AfterReviewIssueGroup["priority"],
+): AfterReviewIssueGroup["priority"] {
+  const order: Record<AfterReviewIssueGroup["priority"], number> = {
+    action_required: 4,
+    suggestion: 3,
+    informational: 2,
+    nit: 1,
+  };
+  return order[next] > order[current] ? next : current;
+}
+
+function formatReviewAfterCommentLocation(comment: ReviewComment | undefined): string {
+  if (!comment?.path) return "general";
+  return `${comment.path}${comment.line ? `:${comment.line}` : ""}`;
 }
 
 function flattenReviewComments(input: PrReviewComments): ReviewComment[] {
@@ -2404,6 +2848,7 @@ async function runReviewAfterAgent(
   ctx: ExtensionCommandContext,
   pr: PRMetadata,
   comments: readonly ReviewComment[],
+  codeExcerpts: readonly AfterReviewCodeExcerpt[],
   options: PolicyInferenceOptions,
 ): Promise<Record<string, unknown>> {
   const model =
@@ -2427,6 +2872,9 @@ async function runReviewAfterAgent(
     comments.length > 120
       ? `- (truncated) ${comments.length - 120} additional comment(s) omitted.`
       : "",
+    "",
+    "## Related code excerpts",
+    ...formatCodeExcerptPromptLines(codeExcerpts),
     "",
     "Focus on concrete solutions and practical lane improvements only when confidence is high.",
   ]
@@ -2943,6 +3391,9 @@ function renderAfterReviewReport(
   pr: PRMetadata,
   analysis: AfterReviewAnalysisResult,
   includeResolved: boolean,
+  processPlan: AfterReviewProcessPlan = { ruleTasks: [], commentGroups: [] },
+  codeExcerpts: readonly AfterReviewCodeExcerpt[] = [],
+  branchCheck: AfterReviewBranchCheck = { matches: true },
 ): string {
   const lines = [
     "## Post-review analysis",
@@ -2951,6 +3402,13 @@ function renderAfterReviewReport(
     `URL: ${pr.url || "(local)"}`,
     `Reviewed comments: ${analysis.commentsAnalyzed} (threads: ${analysis.threadsAnalyzed}, include resolved: ${includeResolved ? "yes" : "no"}).`,
     `Policy-style comments detected: ${analysis.policyHints.length}.`,
+    `Branch check: current=${branchCheck.currentBranch || "unknown"}, PR=${branchCheck.prBranch || "unknown"}, matches=${branchCheck.matches ? "yes" : "no"}.`,
+    "",
+    "### Post-review workflow plan",
+    "",
+    "| # | Comment/group | Action |",
+    "|---:|---|---|",
+    ...renderAfterReviewPlanRows(processPlan),
     "",
     "### Comment processing and suggested solutions",
     "",
@@ -3023,7 +3481,38 @@ function renderAfterReviewReport(
     );
   }
 
+  if (codeExcerpts.length) {
+    lines.push("", "### Related code excerpts", "");
+    lines.push(...formatCodeExcerptReportLines(codeExcerpts));
+  }
+
   return lines.join("\n");
+}
+
+function renderAfterReviewPlanRows(processPlan: AfterReviewProcessPlan): string[] {
+  const rows: string[] = [];
+  for (const [index, task] of processPlan.ruleTasks.entries()) {
+    rows.push(
+      `| ${index + 1} | ${escapePipeCell(task.commentId)} | ${escapePipeCell(`Create ${task.ruleKind} rule ${task.targetPathHint}, prove it fails on ${task.location}, fix the issue, rerun on changed files, reply with other occurrences.`)} |`,
+    );
+  }
+  const offset = rows.length;
+  for (const [index, group] of processPlan.commentGroups.entries()) {
+    rows.push(
+      `| ${offset + index + 1} | ${escapePipeCell(group.commentIds.join(", "))} | ${escapePipeCell(`Spawn one agent for ${group.issueType}; fix, ask clarification, or explain not relevant.`)} |`,
+    );
+  }
+  return rows.length ? rows : ["| — | — | No reviewer follow-up work identified. |"];
+}
+
+function formatCodeExcerptReportLines(excerpts: readonly AfterReviewCodeExcerpt[]): string[] {
+  return excerpts.flatMap((excerpt) => [
+    `#### ${excerpt.commentId} ${excerpt.path}${excerpt.line ? `:${excerpt.line}` : ""}`,
+    "",
+    excerpt.error ? `Could not read code: ${excerpt.error}` : "```",
+    ...(excerpt.error ? [] : [excerpt.content || "(empty excerpt)", "```"]),
+    "",
+  ]);
 }
 
 async function hasDevEslintDirectory(root: string): Promise<boolean> {
