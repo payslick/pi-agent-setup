@@ -7,12 +7,13 @@ Project-local setup for Pi coding-agent extensions and development guardrails.
 - `.pi/extensions/tmux-subagents/` — spawn independent Pi RPC subagents in visible tmux panes, communicate with them, forward clarification questions back to the main agent, and automatically summarize task/runtime/effort/cost/result metadata when they finish.
 - `.pi/extensions/tavily-web/` — exposes Tavily-backed `web_search`, `web_extract`, `web_research`, and `web_research_status` tools for online research with truncation-safe outputs.
 - `.pi/extensions/project-index/` — exposes local `project_index_status`, `project_index_refresh`, `project_index_search`, and `project_index_impact` tools backed by an on-demand filesystem index.
+- `.pi/extensions/screenshot.ts` — exposes `take_screenshot` and `/screenshot` for app page screenshots with optional element highlights, pre-capture actions, and GitHub release upload for PR embedding.
 - `.pi/extensions/multi-edit.ts` — applies exact replacements across multiple files; background post-edit checks handle validation.
 - `.pi/extensions/pr-review/` — recovered multi-lane PR review workflow with `/review`, `/review-local`, cached rerendering, HTML/Markdown reports, dry-run comment payloads, and group-row table merging.
 - `.pi/extensions/bash-guard.ts` — blocks unsafe shell patterns, discourages ad hoc Python/dev servers, rewrites common search commands to `rg`, and rejects unsupported `find` rewrites instead of silently changing semantics.
 - `.pi/extensions/read-many-files-lines.ts` — adds a multi-file line-range reader, blocks bash file readers/post-processors such as `cat`, `sed`, `head`, `tail`, `sort`, and `wc`, and tells file-listing/search pipelines to retry with `rg` directly.
 - `.pi/extensions/vim-motion/` — replaces the input editor with a Vim-style normal/insert modal editor, shows mode in the footer, resets to insert mode for each agent turn, and requires double Esc to interrupt active turns.
-- `.pi/extensions/post-edit-checks.ts` — runs per-file `bun run format`, `bun run check`, and `bun run typecheck` after edits, reports only persistent failures, and never invokes ESLint directly.
+- `.pi/extensions/post-edit-checks.ts` — batches file edits, runs configured `format`, `check`, `typecheck`, and unit-test scripts in the background, reports `code passes` on success, and surfaces only failures/warnings with bounded command output.
 - `.pi/extensions/task-scope-system-prompt.ts` — appends a task-scope discipline section to the system prompt so agents only edit files directly related to the user request and avoid unrelated cleanup/refactors.
 - `.pi/extensions/pr-link-status.ts` — shows a clickable GitHub PR status item in the Pi UI when the current branch has an open PR.
 - `.pi/extensions/codex-overload-kimi-failover.ts` — detects Codex `server_is_overloaded` failures, temporarily switches to Kimi on OpenRouter, shows a countdown + previous model in the footer, then reverts.
@@ -55,7 +56,9 @@ See `.pi/extensions/tmux-subagents/README.md` for the full command and tool refe
 
 ```bash
 bun run check
-bun test ./.pi/extensions/tmux-subagents/index.test.ts
+bun test ./.pi/extensions
 ```
 
 `bun run check` runs `oxlint` over the extensions and `tsgo --noEmit` for typechecking.
+
+Background post-edit validation uses package scripts when present. Unit tests use `test:unit`, then `unit`, then `test`; set `PI_POST_EDIT_RUN_TESTS=0` to skip them, `PI_POST_EDIT_BATCH_DELAY_MS` to tune edit batching, and `PI_POST_EDIT_CHECK_TIMEOUT_MS` for per-command timeouts.

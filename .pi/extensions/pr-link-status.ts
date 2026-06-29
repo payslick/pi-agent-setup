@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 interface CommandResult {
@@ -13,9 +15,16 @@ interface PullRequestInfo {
   headRefName?: string;
 }
 
+interface GetPrNumberResult {
+  status: "found" | "none" | "multiple";
+  pr?: PullRequestInfo;
+}
+
 const STATUS_KEY = "branch-pr";
 const REFRESH_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 10_000;
+const BRIGHT_WHITE = "\u001B[97m";
+const FG_RESET = "\u001B[39m";
 
 let refreshTimer: NodeJS.Timeout | undefined;
 let refreshInFlight = false;
@@ -56,8 +65,8 @@ function run(
 
 function parsePrJson(stdout: string): PullRequestInfo | null {
   try {
-    const parsed = JSON.parse(stdout.trim()) as PullRequestInfo | PullRequestInfo[];
-    const pr = Array.isArray(parsed) ? parsed[0] : parsed;
+    const parsed = JSON.parse(stdout.trim()) as GetPrNumberResult;
+    const pr = parsed.status === "found" ? parsed.pr : undefined;
     if (!pr || typeof pr.number !== "number" || typeof pr.url !== "string") return null;
     return pr;
   } catch {
@@ -69,38 +78,33 @@ function terminalLink(url: string, label: string): string {
   return `\u001B]8;;${url}\u001B\\${label}\u001B]8;;\u001B\\`;
 }
 
-async function currentBranch(cwd: string): Promise<string | null> {
-  const result = await run("git", ["branch", "--show-current"], cwd);
-  if (result.code !== 0) return null;
-  const branch = result.stdout.trim();
-  return branch || null;
+function brightWhite(text: string): string {
+  return `${BRIGHT_WHITE}${text}${FG_RESET}`;
 }
 
-async function findPr(cwd: string, branch: string): Promise<PullRequestInfo | null> {
-  const view = await run("gh", ["pr", "view", "--json", "number,url,headRefName"], cwd);
-  if (view.code === 0) {
-    const pr = parsePrJson(view.stdout);
-    if (pr) return pr;
-  }
+function prUrlLabel(pr: PullRequestInfo): string {
+  const numberText = String(pr.number);
+  return pr.url.endsWith(numberText)
+    ? `${pr.url.slice(0, -numberText.length)}${brightWhite(numberText)}`
+    : pr.url;
+}
 
-  const list = await run(
-    "gh",
-    [
-      "pr",
-      "list",
-      "--head",
-      branch,
-      "--state",
-      "open",
-      "--json",
-      "number,url,headRefName",
-      "--limit",
-      "1",
-    ],
-    cwd,
-  );
-  if (list.code !== 0) return null;
-  return parsePrJson(list.stdout);
+function getPrNumberScript(cwd: string): string | null {
+  const envDir = process.env.PI_FINITO_SCRIPTS_DIR?.trim();
+  const scriptDirs = [
+    envDir ? resolve(cwd, envDir) : undefined,
+    join(cwd, ".pi/finito-scripts/scripts"),
+    join(cwd, "skills/skills/finito-scripts/scripts"),
+  ].filter((dir): dir is string => Boolean(dir));
+  return scriptDirs.map((dir) => join(dir, "getPrNumber.ts")).find(existsSync) ?? null;
+}
+
+async function findPr(cwd: string): Promise<PullRequestInfo | null> {
+  const script = getPrNumberScript(cwd);
+  if (!script) return null;
+  const result = await run("bun", [script, "--current-branch-only"], cwd);
+  if (result.code !== 0) return null;
+  return parsePrJson(result.stdout);
 }
 
 function setStatus(ctx: ExtensionContext, text: string | undefined) {
@@ -113,20 +117,13 @@ async function refreshPrStatus(ctx: ExtensionContext) {
   if (!ctx.hasUI || refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const branch = await currentBranch(ctx.cwd);
-    if (!branch) {
-      setStatus(ctx, undefined);
-      return;
-    }
-
-    const pr = await findPr(ctx.cwd, branch);
+    const pr = await findPr(ctx.cwd);
     if (!pr) {
       setStatus(ctx, undefined);
       return;
     }
 
-    const label = `PR #${pr.number}`;
-    setStatus(ctx, ctx.ui.theme.fg("accent", terminalLink(pr.url, label)));
+    setStatus(ctx, terminalLink(pr.url, prUrlLabel(pr)));
   } catch {
     setStatus(ctx, undefined);
   } finally {

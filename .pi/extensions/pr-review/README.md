@@ -4,7 +4,7 @@ Recovered PR review workflow.
 
 ## Commands
 
-- `/pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--skip-screenshots]` — create or update a draft GitHub PR from the current branch, following `skills/skills/pr` title/body, label, screenshot, preflight, CI-watch, and self-review workflow.
+- `/pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--screenshots <file>] [--skip-screenshots]` — create or update a draft GitHub PR from the current branch, following `skills/skills/pr` title/body, label, stale-docs, uploaded-screenshot, preflight, CI-watch, and self-review workflow.
 - `/pr-update [pr-number] [--no-checks] [--no-push] [--no-metadata]` — sync an existing PR branch with its base, resolve migration/code conflicts, fix stale docs references, run checks, push, refresh PR metadata when needed, and start CI watch.
 - `/pr-review [pr-number] [--no-agents] [--lanes=a,b] [--open-visual]` — fetch a GitHub PR with `gh`, run lane reviewers, and render a report.
 - `/pr-review-local [base-ref] [--no-agents] [--lanes=a,b] [--open-visual]` — review the local diff against a base ref (default `origin/main`).

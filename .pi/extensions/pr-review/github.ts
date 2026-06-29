@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   DiffHunk,
@@ -51,43 +52,6 @@ interface GhPrView {
   headRefOid?: string;
   files?: GhPrFile[];
 }
-
-const PR_COMMENTS_QUERY = `
-  query($owner: String!, $repo: String!, $pr: Int!) {
-    repository(owner: $owner, name: $repo) {
-      pullRequest(number: $pr) {
-        reviewThreads(first: 100) {
-          nodes {
-            id
-            isResolved
-            comments(first: 30) {
-              nodes {
-                id
-                databaseId
-                body
-                path
-                line
-                author { login }
-                url
-                createdAt
-              }
-            }
-          }
-        }
-        comments(first: 100) {
-          nodes {
-            id
-            databaseId
-            body
-            author { login }
-            url
-            createdAt
-          }
-        }
-      }
-    }
-  }
-`;
 
 export async function resolvePrNumber(
   exec: PiExec,
@@ -215,69 +179,54 @@ export async function fetchPrReviewComments(
   prNumber: number,
   options: FetchPrReviewCommentsOptions = {},
 ): Promise<PrReviewComments> {
-  const includeResolvedThreads = options.includeResolvedThreads === true;
-
-  const repoResult = await exec(
-    "gh",
-    ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-    { cwd, timeout: 20_000 },
-  );
-  if (repoResult.code !== 0) {
-    throw new Error(repoResult.stderr.trim() || "Failed to resolve repository owner/name.");
-  }
-  const [owner, repo] = repoResult.stdout.trim().split("/");
-  if (!owner || !repo) throw new Error("Could not parse repository owner/name.");
-
-  const graphqlResult = await exec(
-    "gh",
-    [
-      "api",
-      "graphql",
-      "-f",
-      `query=${PR_COMMENTS_QUERY}`,
-      "-f",
-      `owner=${owner}`,
-      "-f",
-      `repo=${repo}`,
-      "-F",
-      `pr=${prNumber}`,
-    ],
-    { cwd, timeout: 60_000 },
-  );
-  if (graphqlResult.code !== 0) {
+  const scriptPath = await resolveFinitoScript(cwd, "getPrComments.ts");
+  const args = [scriptPath, String(prNumber)];
+  if (options.includeResolvedThreads !== true) args.push("--unresolved-only");
+  const result = await exec("bun", args, { cwd, timeout: 60_000 });
+  if (result.code !== 0) {
     throw new Error(
-      graphqlResult.stderr.trim() ||
-        graphqlResult.stdout.trim() ||
-        `gh api graphql failed for PR ${prNumber}`,
+      result.stderr.trim() || result.stdout.trim() || `getPrComments.ts failed for PR ${prNumber}`,
     );
   }
 
-  const parsed = JSON.parse(graphqlResult.stdout.trim()) as unknown;
-  const pullRequest = extractPullRequestNode(parsed);
-  if (!pullRequest) return { reviewThreads: [], comments: [] };
-
-  const reviewThreads = arrayValue(pullRequest.reviewThreads)
-    .flatMap((thread, index) => normalizeReviewThread(thread, index))
-    .filter((thread) => includeResolvedThreads || !thread.isResolved);
-
-  const comments = arrayValue(pullRequest.comments).flatMap((comment, index) =>
+  const parsed = JSON.parse(result.stdout.trim()) as unknown;
+  const reviewThreads = arrayValueFromNodes(parsed, "reviewThreads").flatMap((thread, index) =>
+    normalizeReviewThread(thread, index),
+  );
+  const comments = arrayValueFromNodes(parsed, "comments").flatMap((comment, index) =>
     normalizeReviewComment(comment, `pr-comment-${index + 1}`),
   );
-
   return { reviewThreads, comments };
 }
 
-function extractPullRequestNode(value: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(value)) return undefined;
-  const data = value.data;
-  if (!isRecord(data)) return undefined;
-  const repository = data.repository;
-  if (!isRecord(repository)) return undefined;
-  const pullRequest = repository.pullRequest;
-  return isRecord(pullRequest) ? pullRequest : undefined;
+async function resolveFinitoScript(cwd: string, scriptName: string): Promise<string> {
+  const envDir = process.env.PI_FINITO_SCRIPTS_DIR?.trim();
+  const scriptDirs = [
+    envDir ? path.resolve(cwd, envDir) : undefined,
+    path.join(cwd, ".pi", "finito-scripts", "scripts"),
+    path.join(cwd, "skills", "skills", "finito-scripts", "scripts"),
+  ].filter((dir): dir is string => Boolean(dir));
+  for (const dir of scriptDirs) {
+    const scriptPath = path.join(dir, scriptName);
+    try {
+      if ((await stat(scriptPath)).isFile()) return scriptPath;
+    } catch {
+      // try next location
+    }
+  }
+  throw new Error(`Could not find finito script: ${scriptName}`);
+}
+
+function arrayValueFromNodes(value: unknown, key: string): unknown[] {
+  if (!isRecord(value)) return [];
+  const raw = value[key];
+  if (Array.isArray(raw)) return raw;
+  if (!isRecord(raw)) return [];
+  return Array.isArray(raw.nodes) ? raw.nodes : [];
 }
 
 function arrayValue(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
   if (!isRecord(value)) return [];
   const nodes = value.nodes;
   return Array.isArray(nodes) ? nodes : [];

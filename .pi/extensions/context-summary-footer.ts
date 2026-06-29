@@ -6,6 +6,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 const SUMMARY_KEY = "context-summary-footer";
 const CODEX_STATUS_KEY = "codex-usage";
 const VIM_STATUS_KEY = "vim-motion";
+const BRANCH_PR_STATUS_KEY = "branch-pr";
 const REFRESH_EVERY_AGENT_TURNS = Number(process.env.PI_CTX_SUMMARY_EVERY ?? 3);
 const SUMMARY_TIMEOUT_MS = Number(process.env.PI_CTX_SUMMARY_TIMEOUT_MS ?? 20_000);
 const SUMMARY_MODEL = process.env.PI_CTX_SUMMARY_MODEL || "openai-codex/gpt-5.5";
@@ -20,6 +21,7 @@ let summarizeInFlight = false;
 let pendingRefresh = false;
 let requestFooterRender: (() => void) | undefined;
 let lastPrompt = "";
+let thinkingLevel = "";
 
 interface CommandResult {
   stdout: string;
@@ -235,20 +237,22 @@ function installFooter(ctx: ExtensionContext): void {
           }
         }
 
+        const statusEntries = Array.from(footerData.getExtensionStatuses().entries()).filter(
+          ([key]) => key !== SUMMARY_KEY,
+        );
+        const prStatus = statusEntries.find(([key]) => key === BRANCH_PR_STATUS_KEY)?.[1];
         let cwd = ctx.sessionManager.getCwd();
         const home = process.env.HOME || process.env.USERPROFILE;
         if (home && cwd.startsWith(home)) cwd = `~${cwd.slice(home.length)}`;
         const branch = footerData.getGitBranch();
         if (branch) cwd = `${cwd} (${branch})`;
+        if (prStatus) cwd = `${cwd} ${prStatus}`;
         const sessionName = ctx.sessionManager.getSessionName();
         if (sessionName) cwd = `${cwd} • ${sessionName}`;
 
         const usage = ctx.getContextUsage();
         const percent = usage?.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
         const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-        const statusEntries = Array.from(footerData.getExtensionStatuses().entries()).filter(
-          ([key]) => key !== SUMMARY_KEY,
-        );
         const codexStatus = oneLine(
           statusEntries.find(([key]) => key === CODEX_STATUS_KEY)?.[1] ?? "",
         );
@@ -270,10 +274,16 @@ function installFooter(ctx: ExtensionContext): void {
           .filter(Boolean)
           .join(theme.fg("dim", " "));
         const model = ctx.model?.id || "no-model";
+        const effort = thinkingLevel;
+        const modelEffort = effort ? `${model} ${effort}` : model;
+        const effortSuffix = effort ? ` ${brightWhite(effort)}` : "";
         const pad = " ".repeat(
-          Math.max(1, width - visibleWidth(statsLeftText) - visibleWidth(model)),
+          Math.max(1, width - visibleWidth(statsLeftText) - visibleWidth(modelEffort)),
         );
-        const statsLine = truncateToWidth(`${statsLeft}${theme.fg("dim", pad + model)}`, width);
+        const statsLine = truncateToWidth(
+          `${statsLeft}${theme.fg("dim", pad + model)}${effortSuffix}`,
+          width,
+        );
 
         const lines = [
           truncateToWidth(theme.fg("accent", summaryText), width, theme.fg("dim", "...")),
@@ -284,7 +294,10 @@ function installFooter(ctx: ExtensionContext): void {
         const statuses = [
           vimStatus || undefined,
           ...statusEntries
-            .filter(([key]) => key !== CODEX_STATUS_KEY && key !== VIM_STATUS_KEY)
+            .filter(
+              ([key]) =>
+                key !== CODEX_STATUS_KEY && key !== VIM_STATUS_KEY && key !== BRANCH_PR_STATUS_KEY,
+            )
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([, text]) => oneLine(text)),
         ].filter(Boolean);
@@ -300,8 +313,14 @@ export default function contextSummaryFooter(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     summaryText = heuristicSummary(ctx);
     agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
+    thinkingLevel = pi.getThinkingLevel();
     installFooter(ctx);
     void refreshSummary(ctx, true);
+  });
+
+  pi.on("thinking_level_select", (event) => {
+    thinkingLevel = event.level;
+    requestFooterRender?.();
   });
 
   pi.on("before_agent_start", (event, ctx) => {
