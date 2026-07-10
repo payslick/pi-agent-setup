@@ -1,5 +1,5 @@
-import { formatLaneList, laneIcon, severityBadge, severityLabel } from "./summary";
 import type { ExecutiveSummaryInput, ReviewFinding, ReviewSeverity } from "./types";
+import { formatLaneList, laneIcon, severityBadge, severityLabel } from "./summary";
 
 export interface VisualReviewRunDetails {
   markdownReportPath?: string;
@@ -32,14 +32,14 @@ main { max-width: 1100px; margin: 0 auto; }
 .metric strong { display: block; font-size: 28px; }
 .finding { border-left: 4px solid #6b7280; }
 .finding.critical { border-color: #ef4444; }
-.finding.important { border-color: #f97316; }
-.finding.mid { border-color: #eab308; }
-.finding.nit { border-color: #d1d5db; }
+.finding.important { border-color: #eab308; }
+.finding.mid { border-color: #d1d5db; }
+.finding.nit { border-color: #22c55e; }
 .severity { font-weight: 700; }
 .severity.critical { color: #ef4444; }
-.severity.important { color: #f97316; }
-.severity.mid { color: #eab308; }
-.severity.nit { color: #d1d5db; }
+.severity.important { color: #eab308; }
+.severity.mid { color: #d1d5db; }
+.severity.nit { color: #22c55e; }
 .meta { color: #9ca3af; font-size: 13px; }
 pre { white-space: pre-wrap; }
 a { color: #93c5fd; }
@@ -52,9 +52,9 @@ a { color: #93c5fd; }
 <section class="card grid">
 ${metric("Total", findings.length)}
 ${metric("🔴 Critical", countFindings(findings, ["blocker"]))}
-${metric("🟠 Important", countFindings(findings, ["high"]))}
-${metric("🟡 Mid", countFindings(findings, ["medium", "low"]))}
-${metric("⚪ Nit", countFindings(findings, ["nit"]))}
+${metric("🟡 Important", countFindings(findings, ["high"]))}
+${metric("⚪ Mid", countFindings(findings, ["medium", "low"]))}
+${metric("🟢 Nit", countFindings(findings, ["nit"]))}
 </section>
 <section class="card">
 <h2>Run details</h2>
@@ -77,13 +77,13 @@ ${findings.length ? findings.map(renderFinding).join("\n") : '<div class="card">
 }
 
 function renderAgentArtifacts(
-  artifacts: readonly { laneId: string; path: string }[] | undefined,
+  artifacts: readonly { laneId: string; path: string }[] | undefined
 ): string {
   if (!artifacts?.length) return "";
   return `<h3>Agent artifacts</h3><ul>${artifacts
     .map(
       (artifact) =>
-        `<li>${escapeHtml(`${laneIcon(artifact.laneId)} ${artifact.laneId}`)}: ${escapeHtml(artifact.path)}</li>`,
+        `<li>${escapeHtml(`${laneIcon(artifact.laneId)} ${artifact.laneId}`)}: ${escapeHtml(artifact.path)}</li>`
     )
     .join("")}</ul>`;
 }
@@ -110,7 +110,7 @@ function severityClass(severity: ReviewSeverity): string {
 
 function countFindings(
   findings: readonly ReviewFinding[],
-  severities: readonly ReviewSeverity[],
+  severities: readonly ReviewSeverity[]
 ): number {
   return findings.filter((finding) => severities.includes(finding.severity)).length;
 }

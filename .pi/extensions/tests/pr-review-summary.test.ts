@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { renderExecutiveSummary } from "../pr-review/summary";
+
 import type { ExecutiveSummaryInput, PRMetadata, ReviewFinding } from "../pr-review/types";
+import { renderExecutiveSummary, severityBadge } from "../pr-review/summary";
 
 const pr: PRMetadata = {
   ref: { owner: "acme", repo: "app", number: 42 },
@@ -18,6 +19,16 @@ function input(findings: readonly ReviewFinding[]): ExecutiveSummaryInput {
 }
 
 describe("pr review executive summary", () => {
+  test("uses the configured severity badge icons", () => {
+    expect((["blocker", "high", "medium", "low", "nit"] as const).map(severityBadge)).toEqual([
+      "🔴 critical",
+      "🟡 important",
+      "⚪ mid",
+      "⚪ mid",
+      "🟢 nit",
+    ]);
+  });
+
   test("renders normal findings with function name in file column", () => {
     const markdown = renderExecutiveSummary(
       input([
@@ -34,12 +45,12 @@ describe("pr review executive summary", () => {
             functionName: "writeInvoiceCsv",
           },
         },
-      ]),
+      ])
     );
 
     expect(markdown).toContain("| # | File | Issue |");
     expect(markdown).toContain(
-      "| 🟠1 | ...eatures/billing/invoices/export/csv-writer.ts :128 #writeInvoiceCsv | 🐛 CSV escaping can corrupt rows |",
+      "| 🟡1 | ...eatures/billing/invoices/export/csv-writer.ts :128 #writeInvoiceCsv | 🐛 CSV escaping can corrupt rows |"
     );
   });
 
@@ -77,7 +88,7 @@ describe("pr review executive summary", () => {
     });
 
     expect(markdown).toContain(
-      "| G1 | — | **Custom migration guide still has ambiguous or unsafe instructions**",
+      "| G1 | — | **Custom migration guide still has ambiguous or unsafe instructions**"
     );
     expect(markdown).toContain("Applies to #1–#2.");
   });
