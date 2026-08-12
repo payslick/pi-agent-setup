@@ -40,7 +40,7 @@ export const noFunctionsOver100: StaticRule = {
 
       // Detect function start
       const isFunctionStart =
-        /\b(function\s+\w+|=>\s*\{|:\s*function\s*\(|\b(class|method|get|set)\b)/.test(line) &&
+        /\b(function\s+\w+|=>\s*\{|:\s*function\s*\(|\b(method|get|set)\b)/.test(line) &&
         line.includes("{");
 
       if (isFunctionStart) {

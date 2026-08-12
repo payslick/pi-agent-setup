@@ -53,4 +53,13 @@ describe("pr review lanes", () => {
 
     expect(prompt).toContain("## PR description\nExports invoices to CSV for finance users.");
   });
+
+  test("requires concise code-first GitHub comments", () => {
+    const prompt = buildLaneReviewPrompt(pr, packet);
+
+    expect(prompt).toContain("Prefer an exact `replacement`, then an illustrative `example`");
+    expect(prompt).toContain("within 400 characters and two short sentences");
+    expect(prompt).toContain('"replacement":"exact raw replacement code"');
+    expect(prompt).toContain('"example":{"language":"ts"');
+  });
 });

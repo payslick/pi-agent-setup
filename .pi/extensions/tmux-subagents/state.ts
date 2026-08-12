@@ -1,3 +1,5 @@
+import type { SubagentSpec } from "./schemas";
+
 export const CUSTOM_ENTRY_TYPE = "tmux-subagent";
 export const COMPLETION_MESSAGE_TYPE = "tmux-subagent-completion";
 
@@ -10,10 +12,14 @@ export interface SpawnedSubagentRecord {
   windowId?: string;
   cwd: string;
   promptPreview: string;
+  profile?: NonNullable<SubagentSpec["profile"]>;
   model?: string;
   provider?: string;
   thinking?: string;
   tools?: string[];
+  skills?: string[];
+  writableFiles?: string[];
+  contractFiles?: string[];
   bridgePath: string;
   configPath: string;
   controlPath: string;
@@ -381,6 +387,23 @@ function isUsageSummaryLine(text: string): boolean {
   );
 }
 
+const REQUIRED_HANDOFF_FIELDS = [
+  "Summary",
+  "Changed files",
+  "Validation",
+  "Deviations",
+  "Risks",
+  "Follow-up",
+];
+
+function handoffLabel(record: SpawnedSubagentRecord, result: string): string {
+  if (!record.profile) return "Handoff";
+  const missing = REQUIRED_HANDOFF_FIELDS.filter(
+    (field) => !new RegExp(`^\\s*-\\s*${field}:`, "im").test(result),
+  );
+  return missing.length ? `Unstructured handoff; missing ${missing.join(", ")}` : "Handoff";
+}
+
 function completionFallback(status: string): string {
   if (status === "success") return "Completed.";
   if (status === "aborted") return "Aborted.";
@@ -399,11 +422,13 @@ function summarizeCompletionResult(rawResult: string, status: string): string {
   for (const candidate of candidates) {
     const cleaned = stripLeadingStatusEmoji(candidate)
       .replace(/^Result:\s*/i, "")
+      .replace(/^Summary:\s*/i, "")
       .replace(/^Error:\s*/i, "")
       .replace(/^Status:\s*/i, "")
       .trim();
     if (
       !cleaned ||
+      cleaned.toLowerCase() === "handoff" ||
       isUsageSummaryLine(cleaned) ||
       cleaned === "---" ||
       cleaned.startsWith("```") ||
@@ -436,5 +461,8 @@ export function formatSubagentCompletionSummary(
     `Task: ${truncateText(compactLine(task), 220)}`,
     usageLine,
     `${statusEmoji} ${resultSummary}`,
-  ].join("\n");
+    result ? `${handoffLabel(record, result)}:\n${truncateText(result, 4000)}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }

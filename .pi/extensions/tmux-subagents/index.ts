@@ -1,11 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { Static } from "typebox";
-import { Type } from "typebox";
+import {
+  contractFilesForSpec,
+  validateImplementationAssignments,
+  writableFilesForSpec,
+} from "./assignments";
+import { BRIDGE_SCRIPT } from "./bridge-script";
+import {
+  askMainAgentSchema,
+  DEFAULT_CAPTURE_LINES,
+  DEFAULT_SUBAGENT_MODEL,
+  MAX_SUBAGENTS_PER_CALL,
+  panesSchema,
+  spawnSubagentsSchema,
+  SUBAGENT_PROFILE_NAMES,
+  type AskMainAgentInput,
+  type PanesInput,
+  type SpawnSubagentsInput,
+  type SubagentSpec,
+} from "./schemas";
+import { resolveSubagentSpec } from "./profiles";
 import {
   COMPLETION_MESSAGE_TYPE,
   CUSTOM_ENTRY_TYPE,
@@ -26,8 +43,6 @@ const EXTENSION_NAME = "tmux-subagents";
 const SPAWN_TOOL_NAME = "spawn_subagents";
 const PANES_TOOL_NAME = "subagent_panes";
 const ASK_MAIN_TOOL_NAME = "ask_main_agent";
-const MAX_SUBAGENTS_PER_CALL = 15;
-const DEFAULT_CAPTURE_LINES = 120;
 const MAX_CAPTURE_LINES = 1000;
 const TMP_ROOT = path.join(".pi", "tmp", "subagents");
 
@@ -49,1117 +64,6 @@ interface TmuxContext {
   paneId: string;
   windowId: string;
 }
-
-const BRIDGE_SCRIPT = `#!/usr/bin/env node
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import readline from "node:readline";
-
-const configPath = process.argv[2];
-if (!configPath) {
-  console.error("Usage: node bridge.mjs <config.json>");
-  process.exit(1);
-}
-
-const config = JSON.parse(await fsp.readFile(configPath, "utf8"));
-const controlPath = config.controlPath;
-const outboxPath = config.outboxPath;
-await fsp.writeFile(controlPath, "", { flag: "a" });
-if (outboxPath) await fsp.writeFile(outboxPath, "", { flag: "a" });
-
-let controlOffset = 0;
-let busy = false;
-let sawAssistantText = false;
-let assistantBlockOpen = false;
-let assistantNeedsNewline = false;
-let closed = false;
-let pendingUiRequest = null;
-let exitAfterChildClose = false;
-let waitingForMainAnswer = false;
-let toolResponsesExpanded = false;
-let activeTools = new Map();
-let openToolBlockKey = null;
-const launchedAt = Date.now();
-let firstAgentStartedAt = 0;
-let firstUserTask = "";
-let finalAssistantResult = "";
-let latestStopReason = "";
-let latestErrorMessage = "";
-let latestModel = "";
-let latestProvider = "";
-let latestThinkingLevel = "";
-let observedMessageKeys = new Set();
-const usageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, turns: 0 };
-
-function stamp() {
-  return new Date().toLocaleTimeString();
-}
-
-const styles = {
-  reset: "\\x1b[0m",
-  bold: "\\x1b[1m",
-  dim: "\\x1b[2m",
-  muted: "\\x1b[90m",
-  accent: "\\x1b[36m",
-  assistant: "\\x1b[96m",
-  assistantText: "\\x1b[37m",
-  comm: "\\x1b[35m",
-  tool: "\\x1b[34m",
-  success: "\\x1b[32m",
-  warning: "\\x1b[33m",
-  error: "\\x1b[31m",
-};
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-
-function paint(style, text) {
-  const value = String(text ?? "");
-  const code = styles[style];
-  return useColor && code ? code + value + styles.reset : value;
-}
-
-function bold(text) {
-  return paint("bold", text);
-}
-
-function dim(text) {
-  return paint("dim", text);
-}
-
-function line(text = "") {
-  process.stdout.write(text + "\\n");
-}
-
-function assistantPrefix() {
-  return paint("assistant", "  │ ");
-}
-
-function endAssistantBlock() {
-  if (assistantBlockOpen && assistantNeedsNewline) process.stdout.write("\\n");
-  assistantBlockOpen = false;
-  assistantNeedsNewline = false;
-}
-
-function beginAssistantBlock() {
-  if (assistantBlockOpen) return;
-  closeOpenToolBlock("assistant output resumed; result follows separately");
-  line();
-  line(paint("assistant", "assistant"));
-  process.stdout.write(assistantPrefix());
-  assistantBlockOpen = true;
-  assistantNeedsNewline = true;
-  sawAssistantText = true;
-}
-
-function writeAssistantDelta(text) {
-  const value = String(text ?? "");
-  if (!value) return;
-  if (!assistantBlockOpen) beginAssistantBlock();
-  const parts = value.split("\\n");
-  for (let index = 0; index < parts.length; index += 1) {
-    if (index > 0) {
-      process.stdout.write("\\n");
-      process.stdout.write(assistantPrefix());
-    }
-    process.stdout.write(paint("assistantText", parts[index]));
-  }
-  assistantNeedsNewline = true;
-}
-
-function stringify(value) {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function truncate(text, max = 1800) {
-  const value = String(text ?? "");
-  if (!value) return "";
-  return value.length > max ? value.slice(0, max) + "…" : value;
-}
-
-function countLines(text) {
-  const value = String(text ?? "").trimEnd();
-  return value ? value.split("\\n").length : 0;
-}
-
-function formatCollapsedToolOutput(output, isError = false) {
-  const value = String(output ?? "").trimEnd();
-  if (!value) return "";
-  const lines = countLines(value);
-  const chars = value.length;
-  const summary = lines + " line" + (lines === 1 ? "" : "s") + ", " + chars + " char" + (chars === 1 ? "" : "s");
-  const label = isError ? "error output collapsed" : "output collapsed";
-  return label + " (" + summary + "; Ctrl-O toggles future output)";
-}
-
-function compact(text) {
-  return String(text ?? "").replace(/\\s+/g, " ").trim();
-}
-
-function previewValue(value, max = 180) {
-  if (typeof value === "string") return JSON.stringify(truncate(compact(value), max));
-  return truncate(stringify(value), max);
-}
-
-function formatArgs(args, max = 900) {
-  if (args === undefined || args === null || args === "") return "";
-  if (typeof args === "string") return truncate(args, max);
-  if (typeof args !== "object") return truncate(String(args), max);
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "{}";
-  return truncate(entries.map(([key, value]) => key + "=" + previewValue(value)).join("  "), max);
-}
-
-function parseJsonish(value) {
-  if (typeof value !== "string") return value;
-  const trimmed = value.trim();
-  if (!trimmed) return value;
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-function textFromParts(parts) {
-  if (parts === undefined || parts === null) return "";
-  if (typeof parts === "string") return parts;
-  if (!Array.isArray(parts)) {
-    if (typeof parts === "object") return stringify(parts);
-    return String(parts);
-  }
-  return parts
-    .map((part) => {
-      if (part === undefined || part === null) return "";
-      if (typeof part === "string") return part;
-      if (typeof part !== "object") return String(part);
-      if (part.type === "text" && typeof part.text === "string") return part.text;
-      if (typeof part.text === "string") return part.text;
-      if ("json" in part) return stringify(part.json);
-      if ("value" in part) return stringify(part.value);
-      if (part.type) return "[" + part.type + "]";
-      return stringify(part);
-    })
-    .filter(Boolean)
-    .join("\\n");
-}
-
-function numberFrom(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function addUsage(usage) {
-  if (!usage || typeof usage !== "object") return;
-  usageTotals.input += numberFrom(usage.input);
-  usageTotals.output += numberFrom(usage.output);
-  usageTotals.cacheRead += numberFrom(usage.cacheRead);
-  usageTotals.cacheWrite += numberFrom(usage.cacheWrite);
-  usageTotals.totalTokens += numberFrom(usage.totalTokens);
-  const costValue = usage.cost && typeof usage.cost === "object" ? usage.cost.total : usage.cost;
-  usageTotals.cost += numberFrom(costValue ?? usage.totalCost ?? usage.costTotal);
-}
-
-function messageContentText(message) {
-  return textFromParts(message?.content);
-}
-
-function assistantMessageText(message) {
-  if (!message || !Array.isArray(message.content)) return messageContentText(message);
-  const text = message.content
-    .map((part) => (part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? part.text : ""))
-    .filter(Boolean)
-    .join("\\n");
-  return text || messageContentText(message);
-}
-
-function messageKey(message) {
-  if (!message || typeof message !== "object") return "";
-  return [message.role || "", message.timestamp || "", message.model || "", message.stopReason || "", compact(messageContentText(message)).slice(0, 160)].join("|");
-}
-
-function observeMessage(message) {
-  if (!message || typeof message !== "object") return;
-  const key = messageKey(message);
-  if (key && observedMessageKeys.has(key)) return;
-  if (key) observedMessageKeys.add(key);
-
-  if (message.role === "user" && !firstUserTask) {
-    const text = messageContentText(message).trim();
-    if (text) firstUserTask = truncate(text, 12000);
-    return;
-  }
-
-  if (message.role !== "assistant") return;
-  usageTotals.turns += 1;
-  addUsage(message.usage);
-  const assistantText = assistantMessageText(message).trim();
-  if (assistantText) finalAssistantResult = truncate(assistantText, 20000);
-  if (message.stopReason) latestStopReason = String(message.stopReason);
-  if (message.errorMessage) latestErrorMessage = String(message.errorMessage);
-  if (message.model) latestModel = String(message.model);
-  if (message.provider) latestProvider = String(message.provider);
-}
-
-function observeState(data) {
-  if (!data || typeof data !== "object") return;
-  if (data.thinkingLevel) latestThinkingLevel = String(data.thinkingLevel);
-
-  const model = data.model;
-  if (typeof model === "string") {
-    latestModel = model;
-    return;
-  }
-  if (!model || typeof model !== "object") return;
-
-  if (model.id) latestModel = String(model.id);
-  else if (model.model) latestModel = String(model.model);
-  else if (model.name) latestModel = String(model.name);
-
-  const provider = model.provider;
-  if (typeof provider === "string") latestProvider = provider;
-  else if (provider && typeof provider === "object" && provider.id) latestProvider = String(provider.id);
-  else if (provider && typeof provider === "object" && provider.name) latestProvider = String(provider.name);
-  else if (model.providerName) latestProvider = String(model.providerName);
-}
-
-function statusFromStopReason(reason, errorMessage) {
-  if (reason === "aborted") return "aborted";
-  if (reason === "error" || errorMessage) return "error";
-  if (reason) return "success";
-  return "unknown";
-}
-
-function completionPayload(endedAt) {
-  const result = finalAssistantResult || latestErrorMessage || "";
-  const usage = usageTotals.turns
-    ? {
-        input: usageTotals.input,
-        output: usageTotals.output,
-        cacheRead: usageTotals.cacheRead,
-        cacheWrite: usageTotals.cacheWrite,
-        totalTokens: usageTotals.totalTokens,
-        cost: usageTotals.cost,
-        turns: usageTotals.turns,
-      }
-    : undefined;
-  return {
-    type: "done",
-    task: firstUserTask || config.promptPreview || "",
-    result,
-    status: statusFromStopReason(latestStopReason, latestErrorMessage),
-    stopReason: latestStopReason || undefined,
-    errorMessage: latestErrorMessage || undefined,
-    runtimeMs: endedAt - launchedAt,
-    agentRuntimeMs: firstAgentStartedAt ? endedAt - firstAgentStartedAt : undefined,
-    usage,
-    effort: latestThinkingLevel || config.thinking || undefined,
-    thinkingLevel: latestThinkingLevel || config.thinking || undefined,
-    model: latestModel || undefined,
-    provider: latestProvider || undefined,
-  };
-}
-
-function printBlockRow(row = "", style = "accent") {
-  const value = String(row ?? "");
-  if (!value) {
-    line(paint(style, "│"));
-    return;
-  }
-  for (const part of value.split("\\n")) line(paint(style, "│ ") + part);
-}
-
-function printBlockEnd(style = "accent") {
-  line(paint(style, "╰─"));
-}
-
-function closeOpenToolBlock(note = "result follows separately") {
-  if (!openToolBlockKey) return;
-  const active = activeTools.get(openToolBlockKey);
-  if (active) active.wrapperOpen = false;
-  printBlockRow(dim(note), "tool");
-  printBlockEnd("tool");
-  openToolBlockKey = null;
-}
-
-function printBlockStart(title, rows = [], style = "accent", leadingBlank = true, closeToolBlock = true) {
-  endAssistantBlock();
-  if (closeToolBlock) closeOpenToolBlock();
-  if (leadingBlank) line();
-  line(paint(style, "╭─ " + title));
-  for (const row of rows) printBlockRow(row, style);
-}
-
-function printBlock(title, rows = [], style = "accent", leadingBlank = true) {
-  printBlockStart(title, rows, style, leadingBlank);
-  printBlockEnd(style);
-}
-
-function statusLine(label, detail = "", style = "muted") {
-  endAssistantBlock();
-  closeOpenToolBlock();
-  line(paint("dim", "[" + stamp() + "] ") + paint(style, label) + (detail ? " " + detail : ""));
-}
-
-function toggleToolResponsesExpanded() {
-  toolResponsesExpanded = !toolResponsesExpanded;
-  const detail = toolResponsesExpanded ? "expanded; future output shown" : "collapsed; future output hidden";
-  statusLine("tool responses", detail, toolResponsesExpanded ? "accent" : "warning");
-}
-
-function communication(from, to, text, label = "") {
-  const suffix = label ? " [" + label + "]" : "";
-  const body = truncate(String(text ?? "").trim() || "(empty message)", 1800);
-  printBlock("message: " + from + " → " + to + suffix, [body], "comm");
-}
-
-function banner() {
-  const shortId = config.id ? config.id.slice(0, 8) : "unknown";
-  printBlock(
-    "pi rpc subagent",
-    [
-      bold(config.name) + dim("  id=" + shortId),
-      "cwd     " + dim(config.cwd),
-      "control " + dim(config.controlPath),
-      "",
-      "Type here and press Enter to talk directly.",
-      dim("Tool responses start collapsed. Press Ctrl-O in this pane to toggle future output."),
-      dim("Commands: /steer <msg>, /follow <msg>, /abort, /quit"),
-    ],
-    "accent",
-    false
-  );
-  line();
-}
-
-function nestedToolCall(source) {
-  if (!source || typeof source !== "object") return {};
-  return source.toolCall || source.tool_call || source.toolUse || source.tool_use || source.call || source.partial || source;
-}
-
-function toolKey(event, fallback) {
-  return (
-    event?.toolCallId ||
-    event?.tool_call_id ||
-    event?.toolUseId ||
-    event?.tool_use_id ||
-    event?.callId ||
-    event?.call_id ||
-    event?.id ||
-    event?.toolCall?.id ||
-    event?.tool_call?.id ||
-    event?.toolUse?.id ||
-    event?.tool_use?.id ||
-    event?.partial?.id ||
-    fallback
-  );
-}
-
-function toolNameFrom(source) {
-  const call = nestedToolCall(source);
-  return source?.toolName || source?.tool_name || source?.name || call?.toolName || call?.tool_name || call?.name || "unknown";
-}
-
-function isBashToolName(name) {
-  const normalized = String(name ?? "").toLowerCase();
-  return normalized === "bash" || normalized.endsWith(".bash");
-}
-
-function toolArgsFrom(source) {
-  const call = nestedToolCall(source);
-  return parseJsonish(
-    call?.arguments ??
-      call?.args ??
-      call?.input ??
-      call?.parameters ??
-      call?.params ??
-      source?.args ??
-      source?.arguments ??
-      source?.input ??
-      source?.parameters ??
-      source?.params
-  );
-}
-
-function formatArgRows(args, maxRows = 8) {
-  if (args === undefined || args === null || args === "") return [];
-  if (typeof args !== "object") return ["args " + dim(truncate(String(args), 900))];
-  const entries = Object.entries(args);
-  if (entries.length === 0) return ["args " + dim("{}")];
-  const rows = [];
-  for (const [key, value] of entries.slice(0, maxRows)) rows.push("arg." + key + " " + dim(previewValue(value, 260)));
-  if (entries.length > maxRows) rows.push(dim("… +" + (entries.length - maxRows) + " more args"));
-  return rows;
-}
-
-function primaryInlineArgKey(name, args) {
-  if (!args || typeof args !== "object") return "";
-  const normalized = String(name ?? "").toLowerCase();
-  if (normalized === "read" || normalized.endsWith(".read")) {
-    if (Object.hasOwn(args, "path")) return "path";
-    if (Object.hasOwn(args, "file_path")) return "file_path";
-  }
-  return "";
-}
-
-function formatInlineArg(key, value) {
-  const renderedValue = previewValue(value, 180);
-  if (value === true) return key;
-  return renderedValue ? key + " " + renderedValue : key;
-}
-
-function formatToolTitle(prefix, name, args, max = 360) {
-  const title = prefix + name;
-  if (args === undefined || args === null || args === "") return title;
-  if (typeof args !== "object") return truncate(title + " " + previewValue(args, max), max);
-
-  const entries = Object.entries(args);
-  if (entries.length === 0) return title + " {}";
-
-  const primaryKey = primaryInlineArgKey(name, args);
-  const parts = [];
-  if (primaryKey) parts.push(previewValue(args[primaryKey], 180));
-  for (const [key, value] of entries) {
-    if (key === primaryKey) continue;
-    parts.push(formatInlineArg(key, value));
-  }
-
-  const suffix = parts.filter(Boolean).join(" ");
-  return suffix ? truncate(title + " " + suffix, max) : title;
-}
-
-function bashCommandFrom(args) {
-  if (typeof args === "string") return compact(args);
-  if (!args || typeof args !== "object") return "";
-  const command = args.command ?? args.cmd ?? args.script;
-  return typeof command === "string" ? compact(command) : "";
-}
-
-function bashArgRows(args, maxRows = 8) {
-  if (typeof args === "string") return [];
-  if (!args || typeof args !== "object") return formatArgRows(args, maxRows);
-  const rest = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (key !== "command" && key !== "cmd" && key !== "script") rest[key] = value;
-  }
-  return Object.keys(rest).length ? formatArgRows(rest, maxRows) : [];
-}
-
-function printToolRequested(call) {
-  const name = toolNameFrom(call);
-  if (isBashToolName(name)) return;
-  const args = toolArgsFrom(call);
-  printBlock(formatToolTitle("tool requested: ", name, args), [], "tool");
-}
-
-function printOpenToolBlock(key, title, rows) {
-  if (openToolBlockKey && openToolBlockKey !== key) closeOpenToolBlock("another tool started; result follows separately");
-  printBlockStart(title, rows, "tool", true, false);
-  openToolBlockKey = key;
-}
-
-function printToolStart(event) {
-  const name = toolNameFrom(event);
-  const args = toolArgsFrom(event);
-  const key = toolKey(event, name);
-  const active = { name, args, startedAt: Date.now(), wrapperOpen: false };
-  activeTools.set(key, active);
-
-  if (name === "ask_main_agent") {
-    const rows = [];
-    if (args && typeof args === "object") {
-      if (args.question) rows.push(String(args.question));
-      if (args.addressedTo) rows.push("addressedTo: " + args.addressedTo);
-      if (args.whatDone) rows.push("whatDone: " + args.whatDone);
-      if (args.context) rows.push("context: " + args.context);
-      if (Array.isArray(args.options) && args.options.length) rows.push("options: " + args.options.join(" | "));
-    }
-    communication(config.name, "main", rows.join("\\n") || formatArgs(args, 1200), "ask_main_agent");
-    return;
-  }
-
-  if (isBashToolName(name)) {
-    const command = bashCommandFrom(args);
-    if (command) {
-      printOpenToolBlock(key, "$ " + truncate(command, 180), bashArgRows(args, 10));
-      active.wrapperOpen = true;
-    }
-    return;
-  }
-
-  printOpenToolBlock(key, formatToolTitle("running tool: ", name, args), []);
-  active.wrapperOpen = true;
-}
-
-function elapsedFor(key) {
-  const active = activeTools.get(key);
-  if (!active || !active.startedAt) return "";
-  const elapsed = Date.now() - active.startedAt;
-  return elapsed < 1000 ? elapsed + "ms" : (elapsed / 1000).toFixed(1) + "s";
-}
-
-function printIndented(text, style = "muted", max = 1800) {
-  const body = truncate(text, max);
-  if (!body) return;
-  for (const row of body.split("\\n")) line(paint(style, "   │ ") + row);
-}
-
-function printIndentedInToolBlock(text, style = "muted", max = 1800) {
-  const body = truncate(text, max);
-  if (!body) return;
-  for (const row of body.split("\\n")) line(paint("tool", "│ ") + paint(style, "   │ ") + row);
-}
-
-function resultTextFromEvent(event) {
-  const result = event?.result ?? event?.output ?? event?.response;
-  if (result === undefined || result === null) return event?.error || event?.errorMessage || "";
-  if (typeof result === "string") return result;
-  if (Array.isArray(result?.content) || typeof result?.content === "string") return textFromParts(result.content);
-  if (typeof result?.text === "string") return result.text;
-  if (typeof result?.message === "string") return result.message;
-  return stringify(result);
-}
-
-function printToolOutput(output, isError, insideToolBlock) {
-  if (!output) return;
-  if (toolResponsesExpanded) {
-    if (insideToolBlock) printIndentedInToolBlock(output, isError ? "error" : "muted");
-    else printIndented(output, isError ? "error" : "muted");
-    return;
-  }
-
-  const collapsed = dim(formatCollapsedToolOutput(output, isError));
-  if (insideToolBlock) printBlockRow(collapsed, "tool");
-  else printIndented(collapsed, isError ? "error" : "muted", 1200);
-}
-
-function printToolEnd(event) {
-  const fallbackName = toolNameFrom(event);
-  const key = toolKey(event, fallbackName);
-  const active = activeTools.get(key);
-  const name = active?.name || fallbackName;
-  const elapsed = elapsedFor(key);
-  activeTools.delete(key);
-  const output = resultTextFromEvent(event);
-  const style = event.isError ? "error" : "success";
-  const icon = event.isError ? "✗" : "✓";
-  endAssistantBlock();
-
-  if (active?.wrapperOpen && openToolBlockKey === key) {
-    printBlockRow("", "tool");
-    printBlockRow(paint(style, icon + " tool ") + bold(name) + (elapsed ? dim("  " + elapsed) : ""), "tool");
-    printToolOutput(output, Boolean(event.isError), true);
-    printBlockEnd("tool");
-    openToolBlockKey = null;
-  } else {
-    line(paint(style, icon + " tool ") + bold(name) + (elapsed ? dim("  " + elapsed) : ""));
-    printToolOutput(output, Boolean(event.isError), false);
-  }
-
-  if (name === "ask_main_agent" && !event.isError) {
-    waitingForMainAnswer = true;
-    statusLine("waiting", "for main-agent answer", "warning");
-  }
-}
-
-function emitOutbox(event) {
-  if (!outboxPath) return Promise.resolve();
-  const payload = { ...event, subagentId: config.id, subagentName: config.name, timestamp: Date.now() };
-  return fsp.appendFile(outboxPath, JSON.stringify(payload) + "\\n", "utf8").catch((error) => {
-    statusLine("outbox error", error instanceof Error ? error.message : String(error), "error");
-  });
-}
-
-const piArgs = ["--mode", "rpc", ...config.piArgs];
-if (config.systemPromptPath) {
-  const systemPrompt = await fsp.readFile(config.systemPromptPath, "utf8");
-  piArgs.push(config.replaceSystemPrompt ? "--system-prompt" : "--append-system-prompt", systemPrompt);
-}
-
-banner();
-statusLine("launch", (process.env.PI_SUBAGENT_PI_BIN || "pi") + " " + piArgs.map((arg) => JSON.stringify(arg)).join(" "), "accent");
-line();
-
-const child = spawn(process.env.PI_SUBAGENT_PI_BIN || "pi", piArgs, {
-  cwd: config.cwd,
-  env: {
-    ...process.env,
-    PI_SUBAGENT_ID: config.id,
-    PI_SUBAGENT_NAME: config.name,
-    PI_SUBAGENT_OUTBOX: outboxPath || "",
-  },
-  stdio: ["pipe", "pipe", "pipe"],
-});
-
-function send(command) {
-  if (closed || child.stdin.destroyed) {
-    statusLine("send failed", "rpc process is closed", "error");
-    return;
-  }
-  child.stdin.write(JSON.stringify(command) + "\\n");
-}
-
-function sendMessage(message, delivery = "prompt") {
-  const text = String(message || "").trim();
-  if (!text) return;
-  waitingForMainAnswer = false;
-
-  communication("main", config.name, text, delivery);
-
-  if (delivery === "steer") {
-    send({ type: "steer", message: text });
-    return;
-  }
-  if (delivery === "follow_up") {
-    send({ type: "follow_up", message: text });
-    return;
-  }
-
-  const command = { type: "prompt", message: text };
-  if (busy) command.streamingBehavior = "followUp";
-  send(command);
-}
-
-function handleControl(item) {
-  if (!item || typeof item !== "object") return;
-  if (item.type === "send") {
-    sendMessage(item.message, item.delivery || "prompt");
-    return;
-  }
-  if (item.type === "abort") {
-    communication("main", config.name, "/abort", "abort");
-    send({ type: "abort" });
-    return;
-  }
-  if (item.type === "quit") {
-    child.kill("SIGTERM");
-  }
-}
-
-async function pollControl() {
-  try {
-    const stat = await fsp.stat(controlPath);
-    if (stat.size < controlOffset) controlOffset = 0;
-    if (stat.size === controlOffset) return;
-
-    const fd = await fsp.open(controlPath, "r");
-    try {
-      const length = stat.size - controlOffset;
-      const buffer = Buffer.alloc(length);
-      await fd.read(buffer, 0, length, controlOffset);
-      controlOffset = stat.size;
-      for (const rawLine of buffer.toString("utf8").split("\\n")) {
-        const trimmed = rawLine.trim();
-        if (!trimmed) continue;
-        try {
-          handleControl(JSON.parse(trimmed));
-        } catch (error) {
-          statusLine("control parse error", error instanceof Error ? error.message : String(error), "error");
-        }
-      }
-    } finally {
-      await fd.close();
-    }
-  } catch (error) {
-    statusLine("control error", error instanceof Error ? error.message : String(error), "error");
-  }
-}
-
-setInterval(pollControl, 200).unref();
-
-function answerUiRequest(request, value) {
-  if (!request) return;
-  if (request.method === "confirm") {
-    send({ type: "extension_ui_response", id: request.id, confirmed: value === "yes" || value === "true" || value === "y" });
-  } else if (value) {
-    send({ type: "extension_ui_response", id: request.id, value });
-  } else {
-    send({ type: "extension_ui_response", id: request.id, cancelled: true });
-  }
-  pendingUiRequest = null;
-}
-
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-readline.emitKeypressEvents(process.stdin, rl);
-process.stdin.on("keypress", (_sequence, key) => {
-  if (key?.ctrl && key.name === "o") toggleToolResponsesExpanded();
-});
-rl.on("line", (input) => {
-  const text = input.replace(/\\x0f/g, "").trim();
-
-  if (pendingUiRequest) {
-    communication("you", "subagent ui", text || "(cancel)", pendingUiRequest.method || "answer");
-    answerUiRequest(pendingUiRequest, text);
-    return;
-  }
-
-  if (!text) return;
-
-  if (text === "/quit" || text === "/exit") {
-    statusLine("quit", "closing subagent pane", "warning");
-    child.kill("SIGTERM");
-    return;
-  }
-  if (text === "/abort") {
-    communication("you", config.name, "/abort", "abort");
-    send({ type: "abort" });
-    return;
-  }
-  if (text.startsWith("/steer ")) {
-    const message = text.slice(7).trim();
-    communication("you", config.name, message, "steer");
-    send({ type: "steer", message });
-    return;
-  }
-  if (text.startsWith("/follow ")) {
-    const message = text.slice(8).trim();
-    communication("you", config.name, message, "follow_up");
-    send({ type: "follow_up", message });
-    return;
-  }
-
-  const command = { type: "prompt", message: text };
-  if (busy) command.streamingBehavior = "followUp";
-  communication("you", config.name, text, busy ? "prompt queued" : "prompt");
-  send(command);
-});
-
-function uiRows(event) {
-  const rows = [];
-  if (event.title) rows.push(bold(event.title));
-  if (event.message) rows.push(event.message);
-  if (Array.isArray(event.options) && event.options.length) rows.push("options: " + event.options.join(" | "));
-  return rows;
-}
-
-function handleAssistantMessageEvent(delta) {
-  if (!delta || typeof delta !== "object") return;
-  if (delta.type === "text_start" || delta.type === "output_text_start") {
-    beginAssistantBlock();
-    return;
-  }
-  if (delta.type === "text_delta" || delta.type === "output_text_delta") {
-    writeAssistantDelta(delta.delta ?? delta.text ?? "");
-    return;
-  }
-  if (delta.type === "text_end" || delta.type === "output_text_end") {
-    endAssistantBlock();
-    return;
-  }
-  if (delta.type === "toolcall_end" || delta.type === "tool_call_end" || delta.type === "tool_use_end") {
-    printToolRequested(delta.toolCall || delta.tool_call || delta.toolUse || delta.tool_use || delta.partial || delta);
-    return;
-  }
-  if (delta.type === "error") {
-    printBlock("assistant error", [delta.errorMessage || delta.reason || "error"], "error");
-  }
-}
-
-function handleRpcEvent(event) {
-  if (!event || typeof event !== "object") return;
-
-  if (event.type === "response") {
-    if (event.success === false) printBlock("rpc error", [event.error || event.command || "unknown error"], "error");
-    else if (event.command === "get_state") observeState(event.data);
-    return;
-  }
-
-  if (event.type === "extension_ui_request") {
-    if (["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"].includes(event.method)) {
-      if (event.method === "notify") statusLine("notify", event.message || "", "accent");
-      return;
-    }
-    pendingUiRequest = event;
-    printBlock(
-      "ui request: " + event.method,
-      [...uiRows(event), dim("Type an answer, or press Enter to cancel.")],
-      "warning"
-    );
-    return;
-  }
-
-  if (event.type === "agent_start") {
-    busy = true;
-    if (!firstAgentStartedAt) firstAgentStartedAt = Date.now();
-    sawAssistantText = false;
-    assistantBlockOpen = false;
-    assistantNeedsNewline = false;
-    statusLine("agent started", "", "accent");
-    send({ type: "get_state" });
-    return;
-  }
-
-  if (event.type === "message_update") {
-    handleAssistantMessageEvent(event.assistantMessageEvent || event.delta || event.messageEvent);
-    return;
-  }
-
-  if (event.type === "message_end") {
-    observeMessage(event.message);
-    return;
-  }
-
-  if (event.type === "tool_execution_start") {
-    printToolStart(event);
-    return;
-  }
-
-  if (event.type === "tool_execution_end") {
-    printToolEnd(event);
-    return;
-  }
-
-  if (event.type === "agent_end") {
-    busy = false;
-    const endedAt = Date.now();
-    if (Array.isArray(event.messages)) {
-      for (const message of event.messages) observeMessage(message);
-    }
-    statusLine("agent ended", "", "accent");
-    if (waitingForMainAnswer) {
-      statusLine("waiting", "for main-agent answer", "warning");
-      return;
-    }
-    emitOutbox(completionPayload(endedAt)).finally(() => {
-      if (config.closeOnAgentEnd !== false) {
-        exitAfterChildClose = true;
-        child.kill("SIGTERM");
-        setTimeout(() => process.exit(0), 500).unref();
-      }
-    });
-    return;
-  }
-
-  if (event.type === "queue_update") {
-    const steering = Array.isArray(event.steering) ? event.steering.length : 0;
-    const followUp = Array.isArray(event.followUp) ? event.followUp.length : 0;
-    if (steering || followUp) statusLine("queue", "steering=" + steering + " followUp=" + followUp, "warning");
-    return;
-  }
-
-  if (event.type === "extension_error") {
-    printBlock("extension error", [event.error || "unknown"], "error");
-  }
-}
-
-let stdoutBuffer = "";
-child.stdout.on("data", (chunk) => {
-  stdoutBuffer += chunk.toString("utf8");
-  while (true) {
-    const index = stdoutBuffer.indexOf("\\n");
-    if (index === -1) break;
-    let rawLine = stdoutBuffer.slice(0, index);
-    stdoutBuffer = stdoutBuffer.slice(index + 1);
-    if (rawLine.endsWith("\\r")) rawLine = rawLine.slice(0, -1);
-    if (!rawLine.trim()) continue;
-    try {
-      handleRpcEvent(JSON.parse(rawLine));
-    } catch {
-      statusLine("rpc raw", truncate(rawLine, 1200), "muted");
-    }
-  }
-});
-
-child.stderr.on("data", (chunk) => {
-  endAssistantBlock();
-  closeOpenToolBlock("stderr output; result follows separately");
-  process.stdout.write(paint("error", chunk.toString("utf8")));
-});
-
-child.on("error", (error) => {
-  printBlock("rpc spawn error", [error.message], "error");
-});
-
-child.on("close", (code, signal) => {
-  closed = true;
-  busy = false;
-  printBlock("pi rpc subagent exited", ["code=" + code + " signal=" + signal], "muted");
-  if (exitAfterChildClose || !config.stayOpen) {
-    process.exit(code || 0);
-  }
-  statusLine("pane left open", "Type /quit or close the pane when done.", "warning");
-});
-
-setTimeout(() => send({ type: "get_state" }), 100);
-
-setTimeout(async () => {
-  if (config.promptPath) {
-    const initialPrompt = await fsp.readFile(config.promptPath, "utf8");
-    sendMessage(initialPrompt, "prompt");
-  }
-}, 250);
-`;
-
-const thinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
-  description: "Thinking level for the subagent.",
-});
-
-const splitSchema = StringEnum(["right", "below"] as const, {
-  description:
-    "Override automatic placement. Omit for default behavior: first subagent opens on the right at 40%; later subagents split vertically below the latest subagent pane.",
-});
-
-const layoutSchema = StringEnum(["none", "tiled", "even-horizontal", "even-vertical"] as const, {
-  description:
-    "Optional tmux layout to apply after spawning. Default none preserves the right-side 40% subagent column.",
-  default: "none",
-});
-
-const deliverySchema = StringEnum(["prompt", "steer", "follow_up"] as const, {
-  description:
-    "How to deliver a message to a subagent. prompt is normal; steer/follow_up queue while busy.",
-  default: "prompt",
-});
-
-const subagentSpecSchema = Type.Object({
-  name: Type.Optional(
-    Type.String({ description: "Human-readable subagent name used for the pane title." }),
-  ),
-  prompt: Type.Optional(
-    Type.String({
-      description:
-        "Initial user prompt/task sent to the subagent RPC session after it starts. Omit to start idle.",
-    }),
-  ),
-  systemPrompt: Type.Optional(
-    Type.String({
-      description:
-        "Subagent system instructions. By default these are appended to Pi's normal system prompt so tools still work.",
-    }),
-  ),
-  replaceSystemPrompt: Type.Optional(
-    Type.Boolean({
-      description: "Use --system-prompt instead of --append-system-prompt. Default false.",
-      default: false,
-    }),
-  ),
-  model: Type.Optional(
-    Type.String({
-      description: "Model pattern/id for --model, e.g. anthropic/claude-sonnet-4-5 or sonnet:high.",
-    }),
-  ),
-  provider: Type.Optional(Type.String({ description: "Provider name for --provider, if needed." })),
-  thinking: Type.Optional(thinkingSchema),
-  tools: Type.Optional(
-    Type.Array(Type.String(), {
-      description: "Optional tool allowlist passed to --tools, e.g. [read, grep, find, ls].",
-    }),
-  ),
-  noTools: Type.Optional(
-    Type.Boolean({ description: "Pass --no-tools to the subagent.", default: false }),
-  ),
-  noBuiltinTools: Type.Optional(
-    Type.Boolean({ description: "Pass --no-builtin-tools to the subagent.", default: false }),
-  ),
-  noSession: Type.Optional(
-    Type.Boolean({
-      description: "Pass --no-session. Default false, so subagents are saved in Pi history.",
-      default: false,
-    }),
-  ),
-  inheritContext: Type.Optional(
-    Type.Boolean({
-      description: "Load AGENTS.md/CLAUDE.md context files. Default true.",
-      default: true,
-    }),
-  ),
-  noExtensions: Type.Optional(
-    Type.Boolean({
-      description: "Pass --no-extensions to the subagent. Default false.",
-      default: false,
-    }),
-  ),
-  noSkills: Type.Optional(
-    Type.Boolean({
-      description: "Pass --no-skills to the subagent. Default false.",
-      default: false,
-    }),
-  ),
-  noPromptTemplates: Type.Optional(
-    Type.Boolean({
-      description: "Pass --no-prompt-templates to the subagent. Default false.",
-      default: false,
-    }),
-  ),
-  cwd: Type.Optional(
-    Type.String({
-      description:
-        "Working directory for the subagent. Relative paths are resolved inside the current project; outside paths are rejected.",
-    }),
-  ),
-  split: Type.Optional(splitSchema),
-  size: Type.Optional(
-    Type.String({
-      description:
-        "tmux split size, e.g. 40% or 20. Only digits with optional % are accepted. Default is 40% for the first right-side subagent pane.",
-    }),
-  ),
-  focus: Type.Optional(
-    Type.Boolean({
-      description: "Focus the new pane after spawning. Default false.",
-      default: false,
-    }),
-  ),
-  stayOpen: Type.Optional(
-    Type.Boolean({
-      description:
-        "Keep the bridge visible if the RPC child exits unexpectedly. Normal agent_end always closes and removes the pane.",
-      default: true,
-    }),
-  ),
-});
-
-const spawnSubagentsSchema = Type.Object({
-  agents: Type.Array(subagentSpecSchema, {
-    minItems: 1,
-    maxItems: MAX_SUBAGENTS_PER_CALL,
-    description: "Subagents to spawn, each in its own tmux pane running a Pi RPC bridge.",
-  }),
-  layout: Type.Optional(layoutSchema),
-});
-
-type SpawnSubagentsInput = Static<typeof spawnSubagentsSchema>;
-type SubagentSpec = Static<typeof subagentSpecSchema>;
-
-const panesSchema = Type.Object({
-  action: StringEnum(["list", "capture", "kill", "send", "abort"] as const, {
-    description:
-      "list known subagents, capture pane output, kill a pane, or send/abort the RPC subagent.",
-  }),
-  id: Type.Optional(
-    Type.String({ description: "Subagent id, name, or tmux pane id for capture/kill/send/abort." }),
-  ),
-  lines: Type.Optional(
-    Type.Number({
-      description: `Number of recent lines to capture. Default ${DEFAULT_CAPTURE_LINES}.`,
-    }),
-  ),
-  message: Type.Optional(Type.String({ description: "Message to send when action is send." })),
-  delivery: Type.Optional(deliverySchema),
-});
-
-type PanesInput = Static<typeof panesSchema>;
-
-const askMainAgentSchema = Type.Object({
-  addressedTo: StringEnum(["main_agent", "user", "unsure"] as const, {
-    description:
-      "Who should answer. Use main_agent for implementation/coordination questions; user for product/intent decisions; unsure when unclear.",
-    default: "unsure",
-  }),
-  question: Type.String({ description: "The question that needs an answer." }),
-  context: Type.Optional(Type.String({ description: "Relevant context for the question." })),
-  whatDone: Type.Optional(
-    Type.String({ description: "Short summary of what the subagent has done so far." }),
-  ),
-  options: Type.Optional(Type.Array(Type.String(), { description: "Optional answer choices." })),
-});
-
-type AskMainAgentInput = Static<typeof askMainAgentSchema>;
 
 let registry = new Map<string, SpawnedSubagentRecord>();
 let outboxOffsets = new Map<string, number>();
@@ -1205,18 +109,28 @@ function validateSplitSize(size: string | undefined): string | undefined {
   return size;
 }
 
-function piArgsForSpec(spec: SubagentSpec): string[] {
+function appendSkillArgs(args: string[], spec: SubagentSpec, projectRoot: string): void {
+  if (spec.skills !== undefined) {
+    args.push("--no-skills");
+    for (const skill of spec.skills) args.push("--skill", resolveInsideRoot(projectRoot, skill));
+    return;
+  }
+  if (spec.noSkills) args.push("--no-skills");
+}
+
+export function piArgsForSpec(spec: SubagentSpec, projectRoot: string): string[] {
   const args: string[] = [];
   if (spec.provider) args.push("--provider", spec.provider);
-  if (spec.model) args.push("--model", spec.model);
+  if (spec.model || !spec.provider) args.push("--model", spec.model ?? DEFAULT_SUBAGENT_MODEL);
   if (spec.thinking) args.push("--thinking", spec.thinking);
   if (spec.noTools) args.push("--no-tools");
-  else if (spec.noBuiltinTools) args.push("--no-builtin-tools");
-  if (spec.tools && spec.tools.length > 0) args.push("--tools", spec.tools.join(","));
+  if (!spec.noTools && spec.noBuiltinTools) args.push("--no-builtin-tools");
+  if (spec.tools?.length) args.push("--tools", spec.tools.join(","));
+  if (spec.excludeTools?.length) args.push("--exclude-tools", spec.excludeTools.join(","));
   if (spec.noSession) args.push("--no-session");
   if (spec.inheritContext === false) args.push("--no-context-files");
   if (spec.noExtensions) args.push("--no-extensions");
-  if (spec.noSkills) args.push("--no-skills");
+  appendSkillArgs(args, spec, projectRoot);
   if (spec.noPromptTemplates) args.push("--no-prompt-templates");
   return args;
 }
@@ -1277,7 +191,7 @@ async function writeSubagentFiles(
         name,
         cwd,
         promptPreview: previewText(spec.prompt),
-        piArgs: piArgsForSpec(spec),
+        piArgs: piArgsForSpec(spec, ctx.cwd),
         thinking: spec.thinking,
         promptPath,
         systemPromptPath,
@@ -1365,14 +279,15 @@ async function spawnOneSubagent(
   spec: SubagentSpec,
   windowId: string,
 ): Promise<SpawnedSubagentRecord> {
+  const resolvedSpec = resolveSubagentSpec(spec);
   const id = randomUUID();
-  const name = sanitizeName(spec.name, friendlySubagentName(id));
-  const cwd = resolveInsideRoot(ctx.cwd, spec.cwd);
+  const name = sanitizeName(resolvedSpec.name, friendlySubagentName(id));
+  const cwd = resolveInsideRoot(ctx.cwd, resolvedSpec.cwd);
   const validatedSize = validateSplitSize(size);
-  const files = await writeSubagentFiles(ctx, spec, id, name, cwd);
+  const files = await writeSubagentFiles(ctx, resolvedSpec, id, name, cwd);
 
   const tmuxArgs = ["split-window", "-P", "-F", "#{pane_id}", "-t", targetPane];
-  if (!spec.focus) tmuxArgs.push("-d");
+  if (!resolvedSpec.focus) tmuxArgs.push("-d");
   tmuxArgs.push(split === "right" ? "-h" : "-v");
   if (validatedSize) tmuxArgs.push("-l", validatedSize);
   tmuxArgs.push("-c", cwd, `bash ${shellQuote(files.runScriptPath)}`);
@@ -1388,11 +303,15 @@ async function spawnOneSubagent(
     paneId,
     windowId,
     cwd,
-    promptPreview: previewText(spec.prompt),
-    model: spec.model,
-    provider: spec.provider,
-    thinking: spec.thinking,
-    tools: spec.tools,
+    promptPreview: previewText(resolvedSpec.prompt),
+    profile: resolvedSpec.profile,
+    model: resolvedSpec.model,
+    provider: resolvedSpec.provider,
+    thinking: resolvedSpec.thinking,
+    tools: resolvedSpec.tools,
+    skills: resolvedSpec.skills,
+    writableFiles: writableFilesForSpec(resolvedSpec, ctx.cwd),
+    contractFiles: contractFilesForSpec(resolvedSpec, ctx.cwd),
     bridgePath: files.bridgePath,
     configPath: files.configPath,
     controlPath: files.controlPath,
@@ -1400,8 +319,8 @@ async function spawnOneSubagent(
     runScriptPath: files.runScriptPath,
     promptPath: files.promptPath,
     systemPromptPath: files.systemPromptPath,
-    replaceSystemPrompt: spec.replaceSystemPrompt ?? false,
-    noSession: spec.noSession ?? false,
+    replaceSystemPrompt: resolvedSpec.replaceSystemPrompt ?? false,
+    noSession: resolvedSpec.noSession ?? false,
     createdAt: Date.now(),
   };
   registry.set(record.id, record);
@@ -1422,6 +341,7 @@ async function spawnSubagents(
 
   const tmux = await ensureTmux(pi, ctx.signal);
   await pruneMissingRecords(pi, ctx.signal, tmux.windowId);
+  validateImplementationAssignments(input.agents, Array.from(registry.values()), ctx.cwd);
   const records: SpawnedSubagentRecord[] = [];
   let stackTargetPane = await findLatestLiveSubagentPane(pi, ctx.signal, tmux.windowId);
 
@@ -1465,6 +385,7 @@ function formatRecord(record: SpawnedSubagentRecord, status?: PaneStatus): strin
       : status?.dead
         ? "dead"
         : status?.currentCommand || "running";
+  const profile = record.profile ? ` profile=${record.profile}` : "";
   const model = record.model ? ` model=${record.model}` : "";
   const provider = record.provider ? ` provider=${record.provider}` : "";
   return [
@@ -1472,7 +393,7 @@ function formatRecord(record: SpawnedSubagentRecord, status?: PaneStatus): strin
     `  cwd: ${shortenHomePath(record.cwd)}`,
     `  task: ${record.promptPreview}`,
     `  control: ${shortenHomePath(record.controlPath)}`,
-    `  run: ${shortenHomePath(record.runScriptPath)}${model}${provider}`,
+    `  run: ${shortenHomePath(record.runScriptPath)}${profile}${model}${provider}`,
   ].join("\n");
 }
 
@@ -1805,12 +726,12 @@ async function promptForSubagent(ctx: ExtensionContext): Promise<SpawnSubagentsI
   const nameInput = (await ctx.ui.input("Subagent name (optional)", "auto-generated")) || "";
   const name =
     nameInput.trim() && nameInput.trim() !== "auto-generated" ? nameInput.trim() : undefined;
+  const profileChoice = (await ctx.ui.select("Worker profile", [
+    "none",
+    ...SUBAGENT_PROFILE_NAMES,
+  ])) as SubagentSpec["profile"] | "none" | undefined;
   const systemPrompt = await ctx.ui.editor("System instructions to append (optional)", "");
-  const model =
-    (await ctx.ui.input(
-      "Model (optional)",
-      ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "",
-    )) || undefined;
+  const model = (await ctx.ui.input("Model (optional)", DEFAULT_SUBAGENT_MODEL)) || undefined;
   const toolsText = (await ctx.ui.input("Tool allowlist (optional comma-separated)", "")) || "";
   const splitChoice = (await ctx.ui.select("Split pane", ["auto", "right", "below"])) as
     | "auto"
@@ -1829,6 +750,7 @@ async function promptForSubagent(ctx: ExtensionContext): Promise<SpawnSubagentsI
     agents: [
       {
         name,
+        profile: profileChoice && profileChoice !== "none" ? profileChoice : undefined,
         prompt: prompt?.trim() ? prompt : undefined,
         systemPrompt: systemPrompt?.trim() ? systemPrompt : undefined,
         model: model?.trim() ? model.trim() : undefined,
@@ -1907,13 +829,14 @@ export default function tmuxSubagents(pi: ExtensionAPI) {
       "Spawn one or more independent Pi subagents in new tmux panes.",
       "Each pane runs a small readable bridge that starts `pi --mode rpc`, displays the conversation, accepts direct typed messages,",
       "and receives messages from the main agent through subagent_panes(action='send').",
-      "Each subagent can have its own prompt, appended/replaced system prompt, model, thinking level, tool allowlist, cwd, and session mode.",
+      "Each subagent can use a domain profile and structured work packet, plus its own prompt, system prompt, model, thinking level, tools, skills, cwd, and session mode.",
     ].join(" "),
     promptSnippet:
       "Spawn independent Pi RPC subagents in visible tmux panes with custom prompts/models/system instructions",
     promptGuidelines: [
       "Use spawn_subagents when work can be delegated to independent agents that the user should be able to watch in tmux panes.",
-      "When using spawn_subagents, give each subagent a clear, bounded prompt and a concise name.",
+      "For implementation, use frontend-implementer, backend-implementer, unit-test-implementer, or e2e-test-implementer with a workPacket that declares exclusive writableFiles, read-only contractFiles, acceptanceCriteria, and nonGoals.",
+      "Never give concurrent implementation subagents overlapping writableFiles; route all contract changes through the main agent.",
       "Use subagent_panes with action send to communicate with spawned subagents, and action capture to inspect pane output.",
     ],
     parameters: spawnSubagentsSchema,

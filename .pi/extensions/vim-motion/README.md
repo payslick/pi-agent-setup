@@ -34,6 +34,7 @@ Insert switches:
 
 Edits/operators:
 
+- Prompt commands: `<Space>y` copies the entire prompt to the system clipboard, `<Space>d` clears it, and `<Space>k`/`<Space>j` replace it with the previous/next history entry without clearing past the newest entry. Arrow keys only move the cursor and do not browse prompt history.
 - Single-key edits: `x` `X` `D` `C`, `u`, `p`, `P`
 - Operators: `d`, `y`, `c`
 - Operator + motion: `db`, `d3w`, `y3w`, `c$`, `df,`, etc.

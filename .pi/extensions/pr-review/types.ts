@@ -75,6 +75,11 @@ export interface ReviewFindingLocation {
   side?: "LEFT" | "RIGHT";
 }
 
+export interface ReviewCodeExample {
+  code: string;
+  language?: string;
+}
+
 export interface ReviewFinding {
   id: string;
   laneId: ReviewLaneId;
@@ -82,6 +87,8 @@ export interface ReviewFinding {
   severity: ReviewSeverity;
   title: string;
   body: string;
+  replacement?: string;
+  example?: ReviewCodeExample;
   suggestion?: string;
   confidence?: number;
   evidence?: string[];

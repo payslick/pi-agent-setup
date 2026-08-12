@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
+import { piArgsForSpec } from "./index";
 import {
   formatQuestionForMainAgent,
   formatSubagentCompletionSummary,
@@ -30,6 +32,46 @@ function record(id: string, paneId: string, windowId?: string): SpawnedSubagentR
     createdAt: 1,
   };
 }
+
+describe("piArgsForSpec", () => {
+  test("defaults unprofiled subagents to the main agent model", () => {
+    expect(piArgsForSpec({}, "/repo")).toEqual(["--model", "openai-codex/gpt-5.6-sol"]);
+  });
+
+  test("loads only selected skills and excludes coordination tools", () => {
+    expect(
+      piArgsForSpec(
+        {
+          skills: [".pi/skills/testing/SKILL.md"],
+          excludeTools: ["spawn_subagents", "subagent_panes"],
+        },
+        "/repo",
+      ),
+    ).toEqual([
+      "--model",
+      "openai-codex/gpt-5.6-sol",
+      "--exclude-tools",
+      "spawn_subagents,subagent_panes",
+      "--no-skills",
+      "--skill",
+      path.resolve("/repo", ".pi/skills/testing/SKILL.md"),
+    ]);
+  });
+
+  test("disables discovery for an explicit empty skill set", () => {
+    expect(piArgsForSpec({ skills: [] }, "/repo")).toEqual([
+      "--model",
+      "openai-codex/gpt-5.6-sol",
+      "--no-skills",
+    ]);
+  });
+
+  test("rejects skills outside the project", () => {
+    expect(() => piArgsForSpec({ skills: ["../secret.md"] }, "/repo")).toThrow(
+      "Subagent cwd must stay inside /repo: ../secret.md",
+    );
+  });
+});
 
 describe("planSubagentPlacement", () => {
   test("opens the first automatic subagent on the right at 40%", () => {
@@ -149,14 +191,18 @@ describe("completion summaries", () => {
     );
   });
 
-  test("formats a brief completion summary without the main-agent prompt block", () => {
+  test("keeps the structured handoff in main-agent context", () => {
     const text = formatSubagentCompletionSummary(
-      { ...record("worker", "%7", "@current"), thinking: "high" },
+      {
+        ...record("worker", "%7", "@current"),
+        profile: "backend-implementer",
+        thinking: "high",
+      },
       {
         type: "done",
         task: "Review the tmux subagent extension.",
         result:
-          "1:47 effort:low 15 turns ↑48k ↓2.8k R195k total:246k $0.42\n✅ Identified spawn-time profiles and runtime RPC configuration as the best path.",
+          "## Handoff\n- Summary: Identified spawn-time profiles and runtime RPC configuration as the best path.\n- Changed files: profiles.ts\n- Validation: focused tests passed\n- Deviations: none\n- Risks: none\n- Follow-up: none",
         runtimeMs: 65_000,
         usage: { input: 1000, output: 250, totalTokens: 1250, cost: 0.0042, turns: 1 },
         status: "success",
@@ -169,6 +215,14 @@ describe("completion summaries", () => {
         "Task: Review the tmux subagent extension.",
         "1:05 effort:high 1 turn ↑1k ↓250 total:1.3k $0.00",
         "✅ Identified spawn-time profiles and runtime RPC configuration as the best path.",
+        "Handoff:",
+        "## Handoff",
+        "- Summary: Identified spawn-time profiles and runtime RPC configuration as the best path.",
+        "- Changed files: profiles.ts",
+        "- Validation: focused tests passed",
+        "- Deviations: none",
+        "- Risks: none",
+        "- Follow-up: none",
       ].join("\n"),
     );
     expect(text).not.toContain("Write a concise subagent completion summary");

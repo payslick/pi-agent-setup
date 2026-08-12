@@ -1,9 +1,9 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "codex-usage";
 const WIDGET_KEY = "codex-usage-details";
@@ -160,7 +160,7 @@ async function loadAuth(): Promise<AuthInfo> {
   if (codexCliAuth) return codexCliAuth;
 
   throw new Error(
-    "No ChatGPT/Codex OAuth token found. Run /login openai-codex in Pi or `codex login`.",
+    "No ChatGPT/Codex OAuth token found. Run /login openai-codex in Pi or `codex login`."
   );
 }
 
@@ -203,7 +203,7 @@ async function fetchCodexUsage(): Promise<UsageFetchResult> {
     if (!response.ok) {
       const message = extractErrorMessage(payload, text || response.statusText);
       throw new Error(
-        `Codex usage request failed (${response.status} ${response.statusText}): ${message}`,
+        `Codex usage request failed (${response.status} ${response.statusText}): ${message}`
       );
     }
 
@@ -243,7 +243,7 @@ function formatDuration(totalSeconds: number): string {
 
 function resetText(
   window: RateLimitWindowPayload | null | undefined,
-  nowSeconds = Date.now() / 1000,
+  nowSeconds = Date.now() / 1000
 ): string {
   if (typeof window?.reset_after_seconds === "number")
     return formatDuration(window.reset_after_seconds);
@@ -277,7 +277,7 @@ function colorForUsage(ctx: ExtensionContext, value: number): (text: string) => 
 }
 
 function formatCompactWindow(
-  window: RateLimitWindowPayload | null | undefined,
+  window: RateLimitWindowPayload | null | undefined
 ): string | undefined {
   const used = usedPercent(window);
   if (used === undefined && !window?.limit_window_seconds) return undefined;
@@ -287,24 +287,19 @@ function formatCompactWindow(
 function formatStatus(result: UsageFetchResult, ctx: ExtensionContext): string {
   const { payload } = result;
   const rateLimit = payload.rate_limit;
-  const parts = ["Codex"];
-  const plan = shortPlan(payload.plan_type);
-  if (plan) parts.push(plan);
-
   const windows = [
     formatCompactWindow(rateLimit?.primary_window),
     formatCompactWindow(rateLimit?.secondary_window),
   ].filter(Boolean);
-  if (windows.length) parts.push(windows.join(" "));
+  const parts = windows.length ? [windows.join(" ")] : ["Codex usage ?"];
   if (rateLimit?.limit_reached || payload.rate_limit_reached_type) parts.push("limited");
 
-  const text = parts.join(" ");
-  return colorForUsage(ctx, maxUsedPercent(payload))(text);
+  return colorForUsage(ctx, maxUsedPercent(payload))(parts.join(" "));
 }
 
 function formatWindowDetail(
   name: string,
-  window: RateLimitWindowPayload | null | undefined,
+  window: RateLimitWindowPayload | null | undefined
 ): string | undefined {
   const used = usedPercent(window);
   if (used === undefined && !window?.limit_window_seconds) return undefined;
@@ -330,7 +325,7 @@ function formatDetails(result: UsageFetchResult): string[] {
     const addPrimary = formatWindowDetail(label, additional.rate_limit?.primary_window);
     const addSecondary = formatWindowDetail(
       `${label} secondary`,
-      additional.rate_limit?.secondary_window,
+      additional.rate_limit?.secondary_window
     );
     if (addPrimary) lines.push(addPrimary);
     if (addSecondary) lines.push(addSecondary);
@@ -350,7 +345,7 @@ function formatDetails(result: UsageFetchResult): string[] {
 
   if (payload.spend_control?.reached) lines.push("Spend control reached");
   lines.push(
-    `Fetched ${result.fetchedAt.toLocaleTimeString()} via ${result.authSource === "pi" ? "Pi auth" : result.authSource}`,
+    `Fetched ${result.fetchedAt.toLocaleTimeString()} via ${result.authSource === "pi" ? "Pi auth" : result.authSource}`
   );
   return lines;
 }
@@ -363,7 +358,7 @@ function setStatus(ctx: ExtensionContext, text: string | undefined) {
 
 async function refreshCodexUsage(
   ctx: ExtensionContext,
-  showErrors = false,
+  showErrors = false
 ): Promise<UsageFetchResult | undefined> {
   if (!ctx.hasUI || refreshInFlight) return lastFetch;
   refreshInFlight = true;

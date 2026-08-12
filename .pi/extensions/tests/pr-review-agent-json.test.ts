@@ -25,6 +25,36 @@ describe("pr review agent JSON parsing", () => {
     expect(parseAgentJson(JSON.stringify(event)).findings).toEqual([]);
   });
 
+  test("preserves structured code and multi-line locations", () => {
+    const parsed = parseAgentJson(
+      JSON.stringify({
+        findings: [
+          {
+            title: "Use the active-settlement predicate",
+            body: "This excludes completed settlements.",
+            path: "src/settlement.ts",
+            startLine: 10,
+            endLine: 14,
+            replacement: "return activeSettlementWhere(employeeId);",
+            example: { language: "ts", code: "const active = rows.filter(isActive);" },
+          },
+        ],
+      }),
+    );
+
+    expect(parsed.findings).toEqual([
+      {
+        title: "Use the active-settlement predicate",
+        body: "This excludes completed settlements.",
+        path: "src/settlement.ts",
+        startLine: 10,
+        endLine: 14,
+        replacement: "return activeSettlementWhere(employeeId);",
+        example: { language: "ts", code: "const active = rows.filter(isActive);" },
+      },
+    ]);
+  });
+
   test("error includes an output snippet", () => {
     expect(() => parseAgentJson("No issues found.")).toThrow(
       "Review agent did not return parseable JSON. Output starts with:",

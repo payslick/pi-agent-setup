@@ -4,7 +4,8 @@ Project-local setup for Pi coding-agent extensions and development guardrails.
 
 ## What's included
 
-- `.pi/extensions/tmux-subagents/` — spawn independent Pi RPC subagents in visible tmux panes, communicate with them, forward clarification questions back to the main agent, and automatically summarize task/runtime/effort/cost/result metadata when they finish.
+- `.pi/extensions/tmux-subagents/` — spawn independent Pi RPC subagents in visible tmux panes, apply frontend/backend/review profiles and structured work packets, communicate with them, forward clarification questions, and return task/runtime/effort/cost/handoff metadata.
+- `.pi/extensions/contract-first-orchestrator.ts` — keeps shared signatures and API contracts with the GPT-5.6 Sol main agent, requires visible `multi-edit` contract changes before implementation workers start, and enforces disjoint worker ownership.
 - `.pi/extensions/tavily-web/` — exposes Tavily-backed `web_search`, `web_extract`, `web_research`, and `web_research_status` tools for online research with truncation-safe outputs.
 - `.pi/extensions/project-index/` — exposes local `project_index_status`, `project_index_refresh`, `project_index_search`, and `project_index_impact` tools backed by an on-demand filesystem index.
 - `.pi/extensions/screenshot.ts` — exposes `take_screenshot` and `/screenshot` for app page screenshots with optional element highlights, pre-capture actions, and GitHub release upload for PR embedding.
@@ -15,6 +16,7 @@ Project-local setup for Pi coding-agent extensions and development guardrails.
 - `.pi/extensions/vim-motion/` — replaces the input editor with a Vim-style normal/insert modal editor, shows mode in the footer, resets to insert mode for each agent turn, and requires double Esc to interrupt active turns.
 - `.pi/extensions/post-edit-checks.ts` — batches file edits, runs configured `format`, `check`, `typecheck`, and unit-test scripts in the background, reports `code passes` on success, and surfaces only failures/warnings with bounded command output.
 - `.pi/extensions/task-scope-system-prompt.ts` — appends a task-scope discipline section to the system prompt so agents only edit files directly related to the user request and avoid unrelated cleanup/refactors.
+- `.pi/extensions/code-style-system-prompt.ts` — appends the shared code style guide to the system prompt for every agent turn.
 - `.pi/extensions/pr-link-status.ts` — shows a clickable GitHub PR status item in the Pi UI when the current branch has an open PR.
 - `.pi/extensions/codex-overload-kimi-failover.ts` — detects Codex `server_is_overloaded` failures, temporarily switches to Kimi on OpenRouter, shows a countdown + previous model in the footer, then reverts.
 
@@ -36,7 +38,7 @@ User commands:
 
 ```text
 /agent investigate the auth flow and report risks
-/agent {"name":"reviewer","model":"sonnet:high","prompt":"Review the extension code."}
+/agent {"name":"reviewer","model":"openai-codex/gpt-5.6-sol","prompt":"Review the extension code."}
 /agents list
 /agents capture <id|name|%pane> [lines]
 /agents send <id|name|%pane> <message>

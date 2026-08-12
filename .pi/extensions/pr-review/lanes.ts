@@ -306,6 +306,15 @@ export function buildLaneReviewPrompt(
     "- Avoid duplicate findings; if one root cause affects multiple lines, report the best representative line.",
     "- For docs lane, focus on stale/unsafe/missing documentation that matters after merge.",
     "",
+    "## GitHub comment style",
+    "- Prefer an exact `replacement`, then an illustrative `example`, then prose alone.",
+    "- Use `replacement` only for complete, mechanically applicable code. Return raw code without Markdown fences and set `startLine` and `endLine` for multi-line replacements.",
+    "- Use `example` only when an exact replacement is unsafe. Put raw code in `example.code`; default `example.language` to `ts`.",
+    "- Keep `title` within 72 characters. Keep rendered prose within 400 characters and two short sentences. Use correct punctuation.",
+    "- Use concise Markdown to emphasize the issue. Do not add greetings, summaries, repeated conclusions, or long headings.",
+    `- Use the project's terminology. Link obscure terms to exact docs or source with a full GitHub blob URL at head ${pr.head.sha || "SHA"}.`,
+    "- Do not repeat the title in the body. Do not return both `replacement` and `example`.",
+    "",
     "## Shared review data",
     ...(artifacts
       ? [
@@ -341,7 +350,7 @@ export function buildLaneReviewPrompt(
     formatHunks(packet.hunks),
     "",
     "Return JSON only with this shape:",
-    '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"functionName":"name","title":"one line","body":"rationale","confidence":0.8,"suggestion":"fix"}]}',
+    '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"startLine":120,"endLine":123,"functionName":"name","title":"short point","body":"at most two short sentences","confidence":0.8,"replacement":"exact raw replacement code","example":{"language":"ts","code":"illustrative raw code"}}]}',
   ].join("\n");
 }
 

@@ -214,6 +214,16 @@ function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
+function alignSides(left: string, right: string, width: number, ellipsis: string): string {
+  const rightWidth = visibleWidth(right);
+  if (rightWidth >= width) return truncateToWidth(right, width, ellipsis);
+
+  const leftWidth = width - rightWidth - 1;
+  const fittedLeft = truncateToWidth(left, leftWidth, ellipsis);
+  const padding = " ".repeat(width - visibleWidth(fittedLeft) - rightWidth);
+  return `${fittedLeft}${padding}${right}`;
+}
+
 function installFooter(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
   ctx.ui.setFooter((tui, theme, footerData) => {
@@ -249,6 +259,7 @@ function installFooter(ctx: ExtensionContext): void {
         if (prStatus) cwd = `${cwd} ${prStatus}`;
         const sessionName = ctx.sessionManager.getSessionName();
         if (sessionName) cwd = `${cwd} • ${sessionName}`;
+        const sessionId = ctx.sessionManager.getSessionId();
 
         const usage = ctx.getContextUsage();
         const percent = usage?.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
@@ -287,7 +298,12 @@ function installFooter(ctx: ExtensionContext): void {
 
         const lines = [
           truncateToWidth(theme.fg("accent", summaryText), width, theme.fg("dim", "...")),
-          truncateToWidth(theme.fg("dim", cwd), width, theme.fg("dim", "...")),
+          alignSides(
+            theme.fg("dim", cwd),
+            theme.fg("dim", sessionId),
+            width,
+            theme.fg("dim", "..."),
+          ),
           statsLine,
         ];
 

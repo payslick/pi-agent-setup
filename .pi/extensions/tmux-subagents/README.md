@@ -29,7 +29,25 @@ Spawn one subagent. If you omit `name`, Pi assigns a friendly id like `rapid-fal
 Spawn with JSON config:
 
 ```text
-/agent {"name":"reviewer","model":"sonnet:high","systemPrompt":"You are a strict reviewer.","prompt":"Review the extension code.","focus":true}
+/agent {"name":"reviewer","model":"openai-codex/gpt-5.6-sol","systemPrompt":"You are a strict reviewer.","prompt":"Review the extension code.","focus":true}
+```
+
+Spawn a contract-bound implementation worker:
+
+```text
+/agent {"name":"backend","profile":"backend-implementer","workPacket":{"objective":"Implement the approved controller bodies","writableFiles":["app/src/server/controllers/example.ts"],"contractFiles":["app/src/server/api/schemas/example.ts","app/src/server/api/routers/example.ts"],"acceptanceCriteria":["Focused controller tests pass"],"nonGoals":["Changing API contracts"]}}
+```
+
+Spawn a unit-test specialist:
+
+```text
+/agent {"name":"unit-tests","profile":"unit-test-implementer","workPacket":{"objective":"Add unit coverage for approved payroll calculations","writableFiles":["app/tests/unit/payroll.test.ts"],"contractFiles":["app/src/lib/payroll.ts"],"acceptanceCriteria":["Focused unit tests pass"],"nonGoals":["Changing production behavior"]}}
+```
+
+Spawn an E2E specialist:
+
+```text
+/agent {"name":"e2e","profile":"e2e-test-implementer","workPacket":{"objective":"Cover the approved employee creation journey","writableFiles":["app/tests/e2e/employee-creation.test.ts"],"contractFiles":["app/src/app/employees/create/page.tsx"],"acceptanceCriteria":["Focused Playwright test passes"],"nonGoals":["Changing product code"]}}
 ```
 
 Spawn multiple panes:
@@ -68,13 +86,33 @@ The LLM gets three tools:
 - `subagent_panes` — list, capture, send messages, abort, or kill panes.
 - `ask_main_agent` — for subagents to ask the main agent/user questions with context.
 
+The project main agent and spawned subagents default to `openai-codex/gpt-5.6-sol` at `high`. Override the subagent model with `PI_SUBAGENT_DEFAULT_MODEL` or a provider-qualified `model`.
+
+Product implementation should use `frontend-implementer` or `backend-implementer`; tests should use `unit-test-implementer` or `e2e-test-implementer`; `test-reviewer` is read-only by role and tool selection. Profiles add domain instructions, narrow tools and skills, structured work packets, contract ownership, and structured handoffs. The extension allows at most two concurrent implementation profiles and rejects missing packets, lexical paths outside the project, cross-worker contract/write overlap, and duplicate writable-file ownership.
+
+These controls are orchestration guardrails, not an OS sandbox. Subagents and their allowed shell commands retain the current user's filesystem permissions; use them only in trusted repositories.
+
+## Customize profile guidance
+
+Each profile's system prompt is plain Markdown under `.pi/agents/`:
+
+- `frontend-implementer.md`
+- `backend-implementer.md`
+- `unit-test-implementer.md`
+- `e2e-test-implementer.md`
+- `test-reviewer.md`
+
+Edit those files to change repository locations, required practices, validation expectations, or handoff format. Keep the ownership and `ask_main_agent` rules unless you intentionally want to weaken contract-first isolation. Run `/reload` after editing; newly spawned agents receive the updated prompt, while already-running agents keep their original prompt.
+
+Profile models, thinking levels, tool allowlists, excluded tools, and loaded skills are configured separately in `.pi/extensions/tmux-subagents/profiles.ts`. Profile names and the tool input schema are defined in `schemas.ts`.
+
 Each spawned subagent supports its own:
 
-- `prompt`
+- `profile`, `workPacket`, and additional `prompt`
 - `systemPrompt` (`--append-system-prompt` by default)
 - `replaceSystemPrompt` (`--system-prompt` when true)
 - `model`, `provider`, `thinking`
-- `tools`, `noTools`, `noBuiltinTools`
+- `tools`, `excludeTools`, `skills`, `noTools`, `noBuiltinTools`
 - `cwd` inside the current project
 - `noSession`
 - `split`, `size`, `focus`, `stayOpen`
