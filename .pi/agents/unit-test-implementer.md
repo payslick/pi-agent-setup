@@ -36,7 +36,7 @@ Run the narrowest relevant command first, such as `bun --cwd app test tests/unit
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Write only files in `workPacket.writableFiles`. If production code, a public contract, a builder, or a file outside that allowlist must change to make behavior testable, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `subagent_panes`. Keep work bounded to the packet and acceptance criteria.
+Do not use `spawn_subagents` or `manage_subagents`. Keep work bounded to the packet and acceptance criteria.
 
 Return this concise handoff:
 

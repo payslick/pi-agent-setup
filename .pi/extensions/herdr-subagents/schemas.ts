@@ -3,7 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 
 export const MAX_SUBAGENTS_PER_CALL = 15;
-export const DEFAULT_CAPTURE_LINES = 120;
+export const DEFAULT_READ_LINES = 120;
 export const DEFAULT_SUBAGENT_MODEL =
   process.env.PI_SUBAGENT_DEFAULT_MODEL ?? "openai-codex/gpt-5.6-sol";
 export const SUBAGENT_PROFILE_NAMES = [
@@ -16,23 +16,6 @@ export const SUBAGENT_PROFILE_NAMES = [
 
 const thinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
   description: "Thinking level for the subagent.",
-});
-
-const splitSchema = StringEnum(["right", "below"] as const, {
-  description:
-    "Override automatic placement. Omit for default behavior: first subagent opens on the right at 40%; later subagents split vertically below the latest subagent pane.",
-});
-
-const layoutSchema = StringEnum(["none", "tiled", "even-horizontal", "even-vertical"] as const, {
-  description:
-    "Optional tmux layout to apply after spawning. Default none preserves the right-side 40% subagent column.",
-  default: "none",
-});
-
-const deliverySchema = StringEnum(["prompt", "steer", "follow_up"] as const, {
-  description:
-    "How to deliver a message to a subagent. prompt is normal; steer/follow_up queue while busy.",
-  default: "prompt",
 });
 
 const workPacketSchema = Type.Object({
@@ -53,9 +36,7 @@ const workPacketSchema = Type.Object({
 });
 
 const subagentSpecSchema = Type.Object({
-  name: Type.Optional(
-    Type.String({ description: "Human-readable subagent name used for the pane title." }),
-  ),
+  name: Type.Optional(Type.String({ description: "Optional human-readable subagent name." })),
   profile: Type.Optional(
     StringEnum(SUBAGENT_PROFILE_NAMES, {
       description: "Reusable domain role with model, tools, skills, and system instructions.",
@@ -94,8 +75,7 @@ const subagentSpecSchema = Type.Object({
   ),
   excludeTools: Type.Optional(
     Type.Array(Type.String(), {
-      description:
-        "Tools disabled with --exclude-tools after profile and explicit tool resolution.",
+      description: "Tools disabled after profile and explicit tool resolution.",
     }),
   ),
   skills: Type.Optional(
@@ -108,12 +88,6 @@ const subagentSpecSchema = Type.Object({
   ),
   noBuiltinTools: Type.Optional(
     Type.Boolean({ description: "Pass --no-builtin-tools to the subagent.", default: false }),
-  ),
-  noSession: Type.Optional(
-    Type.Boolean({
-      description: "Pass --no-session. Default false, so subagents are saved in Pi history.",
-      default: false,
-    }),
   ),
   inheritContext: Type.Optional(
     Type.Boolean({
@@ -142,27 +116,13 @@ const subagentSpecSchema = Type.Object({
   cwd: Type.Optional(
     Type.String({
       description:
-        "Working directory for the subagent. Relative paths are resolved inside the current project; outside paths are rejected.",
-    }),
-  ),
-  split: Type.Optional(splitSchema),
-  size: Type.Optional(
-    Type.String({
-      description:
-        "tmux split size, e.g. 40% or 20. Only digits with optional % are accepted. Default is 40% for the first right-side subagent pane.",
+        "Working directory for the subagent. Relative paths resolve from the current project; absolute worktree paths are allowed.",
     }),
   ),
   focus: Type.Optional(
     Type.Boolean({
-      description: "Focus the new pane after spawning. Default false.",
+      description: "Focus the new Herdr tab after spawning. Default false.",
       default: false,
-    }),
-  ),
-  stayOpen: Type.Optional(
-    Type.Boolean({
-      description:
-        "Keep the bridge visible if the RPC child exits unexpectedly. Normal agent_end always closes and removes the pane.",
-      default: true,
     }),
   ),
 });
@@ -171,33 +131,28 @@ export const spawnSubagentsSchema = Type.Object({
   agents: Type.Array(subagentSpecSchema, {
     minItems: 1,
     maxItems: MAX_SUBAGENTS_PER_CALL,
-    description: "Subagents to spawn, each in its own tmux pane running a Pi RPC bridge.",
+    description: "Subagents to start in separate tabs of the current Herdr workspace.",
   }),
-  layout: Type.Optional(layoutSchema),
 });
 
 export type SpawnSubagentsInput = Static<typeof spawnSubagentsSchema>;
 export type SubagentSpec = Static<typeof subagentSpecSchema>;
 export type SubagentWorkPacket = Static<typeof workPacketSchema>;
 
-export const panesSchema = Type.Object({
-  action: StringEnum(["list", "capture", "kill", "send", "abort"] as const, {
-    description:
-      "list known subagents, capture pane output, kill a pane, or send/abort the RPC subagent.",
+export const manageSubagentsSchema = Type.Object({
+  action: StringEnum(["list", "read", "prompt", "focus", "abort", "close"] as const, {
+    description: "List, inspect, prompt, focus, abort, or close Herdr-managed subagents.",
   }),
   id: Type.Optional(
-    Type.String({ description: "Subagent id, name, or tmux pane id for capture/kill/send/abort." }),
+    Type.String({ description: "Subagent id, name, Herdr tab id, or Herdr pane id." }),
   ),
   lines: Type.Optional(
-    Type.Number({
-      description: `Number of recent lines to capture. Default ${DEFAULT_CAPTURE_LINES}.`,
-    }),
+    Type.Number({ description: `Number of recent lines to read. Default ${DEFAULT_READ_LINES}.` }),
   ),
-  message: Type.Optional(Type.String({ description: "Message to send when action is send." })),
-  delivery: Type.Optional(deliverySchema),
+  message: Type.Optional(Type.String({ description: "Message required for action=prompt." })),
 });
 
-export type PanesInput = Static<typeof panesSchema>;
+export type ManageSubagentsInput = Static<typeof manageSubagentsSchema>;
 
 export const askMainAgentSchema = Type.Object({
   addressedTo: StringEnum(["main_agent", "user", "unsure"] as const, {

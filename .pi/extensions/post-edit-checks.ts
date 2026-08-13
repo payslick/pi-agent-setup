@@ -168,6 +168,14 @@ export function appendPostEditValidationInstructions(systemPrompt: string): stri
   return `${systemPrompt}\n\n${POST_EDIT_VALIDATION_INSTRUCTIONS}`;
 }
 
+export function validationCommandWaves(
+  commands: readonly ValidationCommand[],
+): ValidationCommand[][] {
+  const format = commands.filter((command) => command.lane === "format");
+  const checks = commands.filter((command) => command.lane !== "format");
+  return [format, checks].filter((wave) => wave.length > 0);
+}
+
 function clearPendingTimer(): void {
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = undefined;
@@ -514,17 +522,20 @@ async function runValidationBatch(
 
   let issues = 0;
   setValidationStatus(ctx, `checks:running ${batch.commands.length}`);
-  await Promise.all(
-    batch.commands.map(async (command) => {
-      const result = await runCommand(command.executable, command.args, ctx.cwd, signal);
-      const issue = validationIssueForResult(command, result);
-      if (!issue) return;
-      await waitForEditQuiescence();
-      if (!isCurrentBatch(batch.revision, signal)) return;
-      issues += 1;
-      reportIssue(pi, ctx, batch, issue);
-    }),
-  );
+  for (const wave of validationCommandWaves(batch.commands)) {
+    await Promise.all(
+      wave.map(async (command) => {
+        const result = await runCommand(command.executable, command.args, ctx.cwd, signal);
+        const issue = validationIssueForResult(command, result);
+        if (!issue) return;
+        await waitForEditQuiescence();
+        if (!isCurrentBatch(batch.revision, signal)) return;
+        issues += 1;
+        reportIssue(pi, ctx, batch, issue);
+      }),
+    );
+    if (!isCurrentBatch(batch.revision, signal)) return;
+  }
 
   await waitForEditQuiescence();
   if (issues === 0 && isCurrentBatch(batch.revision, signal)) reportPass(pi, ctx, batch);

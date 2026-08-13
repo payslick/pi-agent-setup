@@ -16,7 +16,7 @@ workPacket:
   acceptanceCriteria: <verifiable completion criteria>
   nonGoals: <explicit exclusions>
 
-Use frontend-implementer and backend-implementer for product code, unit-test-implementer for unit tests, and e2e-test-implementer for Playwright journeys. All implementation profiles use GPT-5.6 Sol high, matching the main agent. Run at most two writing workers concurrently. Writable files must never overlap. Workers must not coordinate with one another. Execute dependent work, overlapping work, and any work requiring a contract change sequentially.
+Use frontend-implementer and backend-implementer for product code, unit-test-implementer for unit tests, and e2e-test-implementer for Playwright journeys. All implementation profiles use GPT-5.6 Sol high, matching the main agent. Each worker opens in a separate tab of the current Herdr workspace; successful workers close their tabs automatically. Run at most two writing workers concurrently. Writable files must never overlap. Workers must not coordinate with one another. Execute dependent work, overlapping work, and any work requiring a contract change sequentially.
 
 Workers cannot change contracts. Handle every contract deviation yourself, update contracts with multi-edit before delegating follow-up work, and write all integration glue yourself. After implementation, perform a read-only review of each worker diff. Independently review the integrated diff and ensure configured final validation passes.
 `;

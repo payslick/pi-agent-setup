@@ -28,7 +28,7 @@ describe("resolveSubagentSpec", () => {
 
     expect(resolved.model).toBe("openai-codex/gpt-5.6-sol");
     expect(resolved.thinking).toBe("high");
-    expect(resolved.excludeTools).toEqual(["spawn_subagents", "subagent_panes"]);
+    expect(resolved.excludeTools).toEqual(["spawn_subagents", "manage_subagents"]);
     expect(resolved.tools).toContain("ask_main_agent");
     expect(resolved.systemPrompt).toContain("Prefer SQL queries over server code");
     expect(resolved.systemPrompt).toContain("Inspect examples under `app/src`");
@@ -49,7 +49,7 @@ describe("resolveSubagentSpec", () => {
     expect(resolved.model).toBe("custom/model");
     expect(resolved.thinking).toBe("high");
     expect(resolved.tools).toEqual(["read", "spawn_subagents"]);
-    expect(resolved.excludeTools).toEqual(["spawn_subagents", "subagent_panes", "write"]);
+    expect(resolved.excludeTools).toEqual(["spawn_subagents", "manage_subagents", "write"]);
     expect(resolved.systemPrompt).toContain("# Frontend implementer");
     expect(resolved.systemPrompt?.endsWith("Use the supplied design reference.")).toBe(true);
   });

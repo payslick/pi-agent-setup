@@ -28,7 +28,7 @@ Run the narrowest relevant package validation from `app/`; from the repository r
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Do not infer or request edits outside the packet. If a contract deviation or scope decision is needed, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `subagent_panes`.
+Do not use `spawn_subagents` or `manage_subagents`.
 
 Return actionable findings first, each with severity, file path, affected behavior, and a concrete fix. Then return this handoff:
 

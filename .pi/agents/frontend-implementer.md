@@ -29,7 +29,7 @@ Verify relevant interaction, loading, empty, error, RTL/LTR, responsive, and per
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Write only files in `workPacket.writableFiles`. Before changing a contract, scope, generated file, or file outside that allowlist, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `subagent_panes`. Keep work bounded to the packet and acceptance criteria.
+Do not use `spawn_subagents` or `manage_subagents`. Keep work bounded to the packet and acceptance criteria.
 
 Return this concise handoff:
 

@@ -4,7 +4,7 @@ Project-local setup for Pi coding-agent extensions and development guardrails.
 
 ## What's included
 
-- `.pi/extensions/tmux-subagents/` — spawn independent Pi RPC subagents in visible tmux panes, apply frontend/backend/review profiles and structured work packets, communicate with them, forward clarification questions, and return task/runtime/effort/cost/handoff metadata.
+- `.pi/extensions/herdr-subagents/` — start independent Pi agents in separate tabs of the current Herdr workspace, apply frontend/backend/review profiles and structured work packets, forward clarification questions, return structured handoffs, and close tabs after successful completion.
 - `.pi/extensions/contract-first-orchestrator.ts` — keeps shared signatures and API contracts with the GPT-5.6 Sol main agent, requires visible `multi-edit` contract changes before implementation workers start, and enforces disjoint worker ownership.
 - `.pi/extensions/tavily-web/` — exposes Tavily-backed `web_search`, `web_extract`, `web_research`, and `web_research_status` tools for online research with truncation-safe outputs.
 - `.pi/extensions/project-index/` — exposes local `project_index_status`, `project_index_refresh`, `project_index_search`, and `project_index_impact` tools backed by an on-demand filesystem index.
@@ -18,7 +18,7 @@ Project-local setup for Pi coding-agent extensions and development guardrails.
 - `.pi/extensions/task-scope-system-prompt.ts` — appends a task-scope discipline section to the system prompt so agents only edit files directly related to the user request and avoid unrelated cleanup/refactors.
 - `.pi/extensions/code-style-system-prompt.ts` — appends the shared code style guide to the system prompt for every agent turn.
 - `.pi/extensions/pr-link-status.ts` — shows a clickable GitHub PR status item in the Pi UI when the current branch has an open PR.
-- `.pi/extensions/codex-overload-kimi-failover.ts` — detects Codex `server_is_overloaded` failures, temporarily switches to Kimi on OpenRouter, shows a countdown + previous model in the footer, then reverts.
+- `.pi/extensions/codex-connection-retry.ts` — retries Codex connection failures after 0, 1, 5, 10, and 20 seconds, reports a persistent fault through Pi and Herdr after those retries, then keeps retrying every minute until recovery.
 
 ## Setup
 
@@ -30,9 +30,9 @@ Run Pi from this repository (or from a project containing this `.pi/extensions` 
 
 For Tavily web tools, set `TAVILY_API_KEY` or `TAVILY_API` before starting Pi.
 
-## Tmux subagents
+## Herdr subagents
 
-The subagent extension requires running Pi inside tmux (`TMUX` and `TMUX_PANE` must be set).
+The subagent extension requires running Pi inside Herdr. Each worker opens in a separate tab of the current workspace with an abbreviated type/task label of at most three words, such as `BE-create-schemas`. Successful workers return their handoff and close their tab automatically.
 
 User commands:
 
@@ -40,19 +40,20 @@ User commands:
 /agent investigate the auth flow and report risks
 /agent {"name":"reviewer","model":"openai-codex/gpt-5.6-sol","prompt":"Review the extension code."}
 /agents list
-/agents capture <id|name|%pane> [lines]
-/agents send <id|name|%pane> <message>
-/agents abort <id|name|%pane>
-/agents kill <id|name|%pane>
+/agents read <id|name|tab|pane> [lines]
+/agents prompt <id|name|tab|pane> <message>
+/agents focus <id|name|tab|pane>
+/agents abort <id|name|tab|pane>
+/agents close <id|name|tab|pane>
 ```
 
 Agent tools:
 
-- `spawn_subagents` — spawn one or more Pi RPC subagents.
-- `subagent_panes` — list, capture, send, abort, or kill subagent panes.
-- `ask_main_agent` — lets a spawned subagent ask the main agent or user a question with context.
+- `spawn_subagents` — start one or more Pi agents in Herdr tabs.
+- `manage_subagents` — list, read, prompt, focus, abort, or close subagents.
+- `ask_main_agent` — lets a subagent ask the main agent or user a question with context.
 
-See `.pi/extensions/tmux-subagents/README.md` for the full command and tool reference.
+See `.pi/extensions/herdr-subagents/README.md` for the full reference.
 
 ## Development
 

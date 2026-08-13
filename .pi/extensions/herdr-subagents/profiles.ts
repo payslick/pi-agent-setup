@@ -50,7 +50,7 @@ const REVIEW_TOOLS = [
   "bash",
   "ask_main_agent",
 ];
-const EXCLUDED_COORDINATION_TOOLS = ["spawn_subagents", "subagent_panes"];
+const EXCLUDED_COORDINATION_TOOLS = ["spawn_subagents", "manage_subagents"];
 
 const readProfilePrompt = (filename: string) =>
   readFileSync(new URL(`../../agents/${filename}`, import.meta.url), "utf8").trim();

@@ -4,6 +4,7 @@ import {
   buildValidationCommands,
   formatValidationIssueOutput,
   selectUnitTestScript,
+  validationCommandWaves,
   validationIssueForResult,
   type CommandResult,
   type ValidationCommand,
@@ -55,6 +56,15 @@ describe("post-edit validation commands", () => {
     expect(commands[1]?.args).toEqual(["run", "check", "--", "src/a.test.ts", "src/a.ts"]);
     expect(commands[2]?.args).toEqual(["run", "typecheck"]);
     expect(commands[3]?.args).toEqual(["run", "test"]);
+  });
+
+  test("runs formatting before parallel read-only checks", () => {
+    const commands = buildValidationCommands(scripts(), ["src/a.ts"]);
+
+    expect(validationCommandWaves(commands).map((wave) => wave.map(({ lane }) => lane))).toEqual([
+      ["format"],
+      ["check", "typecheck", "unit-tests"],
+    ]);
   });
 
   test("prefers explicit unit-test scripts and can disable tests", () => {
