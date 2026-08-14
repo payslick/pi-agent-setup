@@ -179,8 +179,92 @@ export interface ReviewComment {
   path?: string;
   line?: number;
   author: { login: string };
+  authorAssociation?: string;
   url: string;
   createdAt?: string;
+  threadId?: string;
+}
+
+export interface ReviewDiscussion {
+  id: string;
+  threadId?: string;
+  isResolved: boolean;
+  rootComment: ReviewComment;
+  comments: ReviewComment[];
+}
+
+export type PostReviewPriority = "P0" | "P1" | "P2" | "P3";
+export type PostReviewDisposition = "fix" | "clarify" | "disagree" | "defer" | "no_action";
+export type PostReviewCategory = "correctness" | "security" | "other";
+
+export interface PostReviewAnalysis {
+  discussionId: string;
+  priority: PostReviewPriority;
+  category: PostReviewCategory;
+  theme: string;
+  summary: string;
+  risk: string;
+  priorityRationale: string;
+  disposition: PostReviewDisposition;
+  suggestedSolution?: string;
+  confidence: number;
+}
+
+export interface PolicyPatternMatch {
+  path: string;
+  line?: number;
+  reason: string;
+}
+
+export interface PolicyPatternEstimate {
+  confirmedCount: number;
+  probableCount: number;
+  searchScope: string;
+  confidence: number;
+  pattern: string;
+  matches: PolicyPatternMatch[];
+}
+
+export interface ReviewPolicy {
+  id: string;
+  marker: "NEVER" | "ALWAYS";
+  statement: string;
+  explanation: string;
+  rationale: string;
+  immediateFix: string;
+  lintRuleGuidance: string;
+  localPiRefinement: string;
+  commentIds: string[];
+  discussionIds: string[];
+  locations: string[];
+  estimate: PolicyPatternEstimate;
+}
+
+export type ReviewPolicyActionKind =
+  | "open_lint_issue"
+  | "spawn_lint_rule_agent"
+  | "spawn_local_pi_agent"
+  | "refine_policy"
+  | "defer";
+
+export interface ReviewPolicyDecision {
+  policyId: string;
+  action: ReviewPolicyActionKind;
+  statement: string;
+  result?: string;
+}
+
+export interface PostReviewPlan {
+  viewerLogin: string;
+  commandCommentIds: string[];
+  discussions: ReviewDiscussion[];
+  analyses: PostReviewAnalysis[];
+  policies: ReviewPolicy[];
+}
+
+export interface PostReviewSelection {
+  approvedDiscussionIds: string[];
+  policyDecisions: ReviewPolicyDecision[];
 }
 
 export interface ReviewThread {
@@ -222,7 +306,7 @@ export interface DesignRuleProposal {
   suggestion: string;
   severity: "error" | "warning";
   category: string;
-  implementation: "design-rule" | "eslint-rule";
+  implementation: "lint-rule" | "design-rule" | "eslint-rule";
   targetPath: string;
   evidenceCommentIds: string[];
 }
@@ -247,6 +331,7 @@ export interface PolicyHint {
 }
 
 export interface PrReviewComments {
+  viewerLogin: string;
   reviewThreads: ReviewThread[];
   comments: ReviewComment[];
 }

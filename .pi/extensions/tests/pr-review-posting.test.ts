@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { prepareDryRunPosting, renderFindingCommentBody } from "../pr-review/posting";
-import type { ReviewFinding } from "../pr-review/types";
+import {
+  appendGithubCommentSignature,
+  prepareDryRunPosting,
+  renderFindingCommentBody,
+} from "../pr-review/posting";
+import type { ReviewComment, ReviewFinding } from "../pr-review/types";
 
 function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -12,6 +16,19 @@ function finding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     title: "Duplicate submissions overwrite data",
     body: "A second request can finish last and replace the first result.",
     location: { filePath: "src/save.ts", line: 12 },
+    ...overrides,
+  };
+}
+
+function existingComment(overrides: Partial<ReviewComment> = {}): ReviewComment {
+  return {
+    id: "comment-1",
+    databaseId: 101,
+    body: "Duplicate submissions can overwrite data when the second request finishes last.",
+    path: "src/save.ts",
+    line: 12,
+    author: { login: "reviewer" },
+    url: "https://github.com/acme/app/pull/42#discussion_r101",
     ...overrides,
   };
 }
@@ -30,6 +47,8 @@ describe("pr review comment posting", () => {
         "```",
         "",
         "**Why:** A second request can finish last and replace the first result.",
+        "",
+        "[correctness - gpt-5.6-sol]",
       ].join("\n"),
     );
   });
@@ -50,6 +69,8 @@ describe("pr review comment posting", () => {
         "```",
         "",
         "**Prefer:** Prefer the existing project helper.",
+        "",
+        "[correctness - gpt-5.6-sol]",
       ].join("\n"),
     );
   });
@@ -77,9 +98,102 @@ describe("pr review comment posting", () => {
           "```",
           "",
           "**Why:** A second request can finish last and replace the first result.",
+          "",
+          "[correctness - gpt-5.6-sol]",
         ].join("\n"),
       },
     ]);
+  });
+
+  test("uses a model-only signature outside review comments", () => {
+    expect(appendGithubCommentSignature("Updated the PR description.")).toBe(
+      "Updated the PR description.\n\n[gpt-5.6-sol]",
+    );
+  });
+
+  test("chains agent types when multiple lanes report the same issue", () => {
+    const result = prepareDryRunPosting({
+      findings: [
+        finding({ id: "dedupe", laneId: "dedupe" }),
+        finding({ id: "security", laneId: "security-api" }),
+      ],
+      issueConsolidations: [
+        {
+          id: "duplicate-submission",
+          title: "Duplicate submissions overwrite data",
+          summary: "Both lanes found the same race.",
+          findingIds: ["dedupe", "security"],
+        },
+      ],
+    });
+
+    expect(result.drafts).toHaveLength(1);
+    expect(result.drafts[0]?.body).toEndWith("[dedupe, security - gpt-5.6-sol]");
+  });
+
+  test("keeps consolidated findings at different locations separate", () => {
+    const result = prepareDryRunPosting({
+      findings: [
+        finding({ id: "dedupe", laneId: "dedupe" }),
+        finding({
+          id: "security",
+          laneId: "security-api",
+          location: { filePath: "src/save.ts", line: 20 },
+        }),
+      ],
+      issueConsolidations: [
+        {
+          id: "duplicate-submission",
+          title: "Duplicate submissions overwrite data",
+          summary: "Related findings occur at separate call sites.",
+          findingIds: ["dedupe", "security"],
+        },
+      ],
+    });
+
+    expect(result.drafts.map(({ body }) => body.split("\n").at(-1))).toEqual([
+      "[dedupe - gpt-5.6-sol]",
+      "[security - gpt-5.6-sol]",
+    ]);
+  });
+
+  test("omits a finding equivalent to an existing review comment", () => {
+    const result = prepareDryRunPosting({
+      findings: [finding()],
+      existingComments: [existingComment()],
+    });
+
+    expect(result.drafts).toEqual([]);
+    expect(result.replies).toEqual([]);
+    expect(result.skippedFindings.map(({ message }) => message)).toContain(
+      "Equivalent existing review comment: https://github.com/acme/app/pull/42#discussion_r101",
+    );
+  });
+
+  test("replies when an equivalent finding adds substantial evidence", () => {
+    const result = prepareDryRunPosting({
+      findings: [
+        finding({
+          body: "A second request can finish last and overwrite the first persisted result because both writes use the stale revision.",
+          evidence: ["tests/save-race.test.ts reproduces two concurrent writes"],
+        }),
+      ],
+      existingComments: [existingComment({ body: "Duplicate submissions can overwrite data." })],
+    });
+
+    expect(result.drafts).toEqual([]);
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies[0]?.inReplyTo).toBe(101);
+  });
+
+  test("keeps distinct existing comments from suppressing a finding", () => {
+    const result = prepareDryRunPosting({
+      findings: [finding()],
+      existingComments: [existingComment({ body: "Rename this function for clarity." })],
+    });
+
+    expect(result.drafts).toHaveLength(1);
+    expect(result.replies).toEqual([]);
   });
 
   test("rejects repeated and overlong prose", () => {

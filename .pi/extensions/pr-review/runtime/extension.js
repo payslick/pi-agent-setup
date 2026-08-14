@@ -1,15 +1,9 @@
-import {
-  buildReviewAfterNextActionOptions,
-  buildReviewAfterNextActionPrompt,
-  buildReviewAfterProcessPlan,
-  extractPolicyHints,
-  inferLaneImprovementsFromPolicyHints,
-  inferNewLaneProposals,
-} from "./runtime/after-review.js";
+import { runPrReviewProcess } from "../process.ts";
+import { runPrCreateCommand } from "./pr-create.js";
+import { runPrUpdateCommand } from "./pr-update.js";
 import {
   demoSummary,
   openLatestVisual,
-  parseAgentJson,
   publishReviewReport,
   rerenderReviewReport,
   restoreLastStatusFromDisk,
@@ -17,24 +11,12 @@ import {
   runReviewCommand,
   setStatus,
   showWidget,
-} from "./runtime/review.js";
-import { createReviewReportRenderer, mergeRenderedIssueGroupRows } from "./runtime/rendering.js";
-import { runPrReviewProcess } from "./process.ts";
+} from "./review.js";
+import { createReviewReportRenderer } from "./rendering.js";
 
 const REVIEW_REPORT_MESSAGE_TYPE = "pr-review-report";
 
-export {
-  buildReviewAfterNextActionOptions,
-  buildReviewAfterNextActionPrompt,
-  buildReviewAfterProcessPlan,
-  extractPolicyHints,
-  inferLaneImprovementsFromPolicyHints,
-  inferNewLaneProposals,
-  mergeRenderedIssueGroupRows,
-  parseAgentJson,
-};
-
-export default function prReviewExtension(pi) {
+export function registerPrReviewExtension(pi) {
   pi.registerMessageRenderer(REVIEW_REPORT_MESSAGE_TYPE, (message) => {
     const markdown =
       message.details?.markdown ?? (typeof message.content === "string" ? message.content : "");
@@ -44,18 +26,13 @@ export default function prReviewExtension(pi) {
   pi.registerCommand("pr-create", {
     description:
       "Create or update a GitHub PR from the current branch (usage: /pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--screenshots <file>] [--skip-screenshots])",
-    handler: async (args, ctx) => {
-      const { runPrCreateCommand } = await import("./runtime/pr-lifecycle.js");
-      return runPrCreateCommand(pi, ctx, args);
-    },
+    handler: async (args, ctx) =>
+      runPrCreateCommand(pi, ctx, args, runPrUpdateCommand.fixStaleDocs),
   });
   pi.registerCommand("pr-update", {
     description:
       "Sync a PR branch with its base, resolve conflicts, run checks, push, refresh metadata, and watch CI (usage: /pr-update [pr-number] [--no-checks] [--no-push] [--no-metadata])",
-    handler: async (args, ctx) => {
-      const { runPrUpdateCommand } = await import("./runtime/pr-lifecycle.js");
-      return runPrUpdateCommand(pi, ctx, args);
-    },
+    handler: async (args, ctx) => runPrUpdateCommand(pi, ctx, args),
   });
   pi.registerCommand("pr-review", {
     description:
@@ -101,3 +78,5 @@ export default function prReviewExtension(pi) {
     },
   });
 }
+
+export default registerPrReviewExtension;

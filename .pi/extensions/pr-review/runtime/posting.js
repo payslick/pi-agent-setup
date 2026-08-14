@@ -1,86 +1,14 @@
-import type {
-  DiffHunk,
-  DiffLine,
-  IssueConsolidation,
-  ReviewComment,
-  ReviewFinding,
-  ReviewFindingLocation,
-} from "./types";
-
-export interface GithubCommentSignatureOptions {
-  readonly modelName?: string;
-  readonly reviewTypes?: readonly string[];
-}
-
-export interface PrepareDryRunPostingInput {
-  readonly findings: readonly ReviewFinding[];
-  readonly hunks?: readonly DiffHunk[];
-  readonly commitId?: string;
-  readonly issueConsolidations?: readonly IssueConsolidation[];
-  readonly existingComments?: readonly ReviewComment[];
-  readonly modelName?: string;
-}
-
-export interface ReviewCommentDraft {
-  readonly findingId: string;
-  readonly path: string;
-  readonly line: number;
-  readonly startLine?: number;
-  readonly side: "LEFT" | "RIGHT";
-  readonly body: string;
-}
-
-export interface ReviewCommentReplyDraft {
-  readonly findingId: string;
-  readonly inReplyTo: number;
-  readonly url: string;
-  readonly body: string;
-}
-
-export interface PostPrReviewPayloadComment {
-  readonly path: string;
-  readonly line: number;
-  readonly side: "LEFT" | "RIGHT";
-  readonly start_line?: number;
-  readonly start_side?: "LEFT" | "RIGHT";
-  readonly body: string;
-}
-
-export interface PostPrReviewPayload {
-  readonly event: "COMMENT";
-  readonly comments: readonly PostPrReviewPayloadComment[];
-  readonly commit_id?: string;
-}
-
-export interface PostingValidationMessage {
-  readonly level: "error" | "warning";
-  readonly findingId: string;
-  readonly message: string;
-}
-
-export interface DryRunPostingResult {
-  readonly drafts: readonly ReviewCommentDraft[];
-  readonly replies: readonly ReviewCommentReplyDraft[];
-  readonly skippedFindings: readonly PostingValidationMessage[];
-  readonly payload: PostPrReviewPayload;
-}
-
-interface PostingFinding {
-  readonly finding: ReviewFinding;
-  readonly reviewTypes: readonly string[];
-}
-
 const DEFAULT_MODEL_NAME = "gpt-5.6-sol";
-const REVIEW_TYPE_BY_LANE: Readonly<Record<string, string>> = {
+const REVIEW_TYPE_BY_LANE = {
   "security-api": "security",
   tests: "testing",
   "code-quality": "quality",
 };
 
-export function prepareDryRunPosting(input: PrepareDryRunPostingInput): DryRunPostingResult {
-  const drafts: ReviewCommentDraft[] = [];
-  const replies: ReviewCommentReplyDraft[] = [];
-  const skippedFindings: PostingValidationMessage[] = [];
+export function prepareDryRunPosting(input) {
+  const drafts = [];
+  const replies = [];
+  const skippedFindings = [];
   const postingFindings = consolidatePostingFindings(
     input.findings,
     input.issueConsolidations ?? [],
@@ -138,10 +66,7 @@ export function prepareDryRunPosting(input: PrepareDryRunPostingInput): DryRunPo
   };
 }
 
-export function findingToDraft(
-  finding: ReviewFinding,
-  signatureOptions: GithubCommentSignatureOptions = {},
-): ReviewCommentDraft | undefined {
+export function findingToDraft(finding, signatureOptions = {}) {
   const location = finding.location;
   const line = location?.endLine ?? location?.line;
   if (!location?.filePath || typeof line !== "number" || !Number.isFinite(line)) return undefined;
@@ -156,10 +81,7 @@ export function findingToDraft(
   };
 }
 
-export function renderFindingCommentBody(
-  finding: ReviewFinding,
-  signatureOptions: GithubCommentSignatureOptions = {},
-): string {
+export function renderFindingCommentBody(finding, signatureOptions = {}) {
   const code = renderFindingCode(finding);
   const body = finding.body.trim();
   const parts = code
@@ -171,29 +93,26 @@ export function renderFindingCommentBody(
   });
 }
 
-export function appendGithubCommentSignature(
-  body: string,
-  options: GithubCommentSignatureOptions = {},
-): string {
+export function appendGithubCommentSignature(body, options = {}) {
   const content = body.trim();
   const signature = githubCommentSignature(options);
   return content.endsWith(signature) ? content : `${content}\n\n${signature}`;
 }
 
-function renderFindingProse(finding: ReviewFinding, body: string): string[] {
+function renderFindingProse(finding, body) {
   const parts = [`**${findingTypeLabel(finding)}:** ${finding.title.trim()}`];
   if (body && normalizeProse(body) !== normalizeProse(finding.title)) parts.push(body);
   if (finding.suggestion?.trim()) parts.push(`**Fix:** ${finding.suggestion.trim()}`);
   return parts;
 }
 
-function githubCommentSignature(options: GithubCommentSignatureOptions): string {
+function githubCommentSignature(options) {
   const modelName = options.modelName?.trim() || DEFAULT_MODEL_NAME;
   const reviewTypes = normalizeReviewTypes(options.reviewTypes ?? []);
   return reviewTypes.length ? `[${reviewTypes.join(", ")} - ${modelName}]` : `[${modelName}]`;
 }
 
-function normalizeReviewTypes(reviewTypes: readonly string[]): string[] {
+function normalizeReviewTypes(reviewTypes) {
   return [
     ...new Set(
       reviewTypes
@@ -204,25 +123,19 @@ function normalizeReviewTypes(reviewTypes: readonly string[]): string[] {
   ].sort();
 }
 
-function consolidatePostingFindings(
-  findings: readonly ReviewFinding[],
-  consolidations: readonly IssueConsolidation[],
-): PostingFinding[] {
+function consolidatePostingFindings(findings, consolidations) {
   const duplicateGroups = duplicateFindingGroups(findings, consolidations);
-  return findings.flatMap((finding): PostingFinding[] => {
+  return findings.flatMap((finding) => {
     const group = duplicateGroups.get(finding.id) ?? [finding];
     if (group[0]?.id !== finding.id) return [];
     return [{ finding, reviewTypes: group.map((duplicate) => duplicate.laneId) }];
   });
 }
 
-function duplicateFindingGroups(
-  findings: readonly ReviewFinding[],
-  consolidations: readonly IssueConsolidation[],
-): Map<string, readonly ReviewFinding[]> {
+function duplicateFindingGroups(findings, consolidations) {
   const findingById = new Map(findings.map((finding) => [finding.id, finding]));
-  const duplicateGroups = new Map<string, readonly ReviewFinding[]>();
-  const addGroup = (group: readonly ReviewFinding[]) => {
+  const duplicateGroups = new Map();
+  const addGroup = (group) => {
     if (!isMultiAgentDuplicateGroup(group) || group.some(({ id }) => duplicateGroups.has(id)))
       return;
     for (const finding of group) duplicateGroups.set(finding.id, group);
@@ -245,11 +158,8 @@ function duplicateFindingGroups(
   return duplicateGroups;
 }
 
-function groupFindingsBy(
-  findings: readonly ReviewFinding[],
-  getKey: (finding: ReviewFinding) => string,
-): Map<string, ReviewFinding[]> {
-  const groups = new Map<string, ReviewFinding[]>();
+function groupFindingsBy(findings, getKey) {
+  const groups = new Map();
   for (const finding of findings) {
     const key = getKey(finding);
     groups.set(key, [...(groups.get(key) ?? []), finding]);
@@ -257,23 +167,23 @@ function groupFindingsBy(
   return groups;
 }
 
-function isMultiAgentDuplicateGroup(group: readonly ReviewFinding[]): boolean {
+function isMultiAgentDuplicateGroup(group) {
   return group.length >= 2 && normalizeReviewTypes(group.map(({ laneId }) => laneId)).length >= 2;
 }
 
-function exactDuplicateKey(finding: ReviewFinding): string {
+function exactDuplicateKey(finding) {
   const reviewArea = exactReviewLocationKey(finding);
   return reviewArea ? `${reviewArea}:${normalizeProse(finding.title).toLowerCase()}` : "";
 }
 
-function reviewAreaKey(finding: ReviewFinding): string {
+function reviewAreaKey(finding) {
   const filePath = finding.location?.filePath;
   if (!filePath) return "";
   const functionName = finding.functionName?.trim() || finding.location?.functionName?.trim();
   return functionName ? `${filePath}#${functionName}` : exactReviewLocationKey(finding);
 }
 
-function exactReviewLocationKey(finding: ReviewFinding): string {
+function exactReviewLocationKey(finding) {
   const location = finding.location;
   const line = location?.endLine ?? location?.line;
   return location?.filePath && typeof line === "number"
@@ -307,23 +217,20 @@ const COMMENT_STOP_WORDS = new Set([
   "would",
 ]);
 
-function findRelatedExistingComment(
-  finding: ReviewFinding,
-  comments: readonly ReviewComment[],
-): ReviewComment | undefined {
+function findRelatedExistingComment(finding, comments) {
   return comments.find(
     (comment) => sameReviewArea(finding, comment) && commentsDescribeSameIssue(finding, comment),
   );
 }
 
-function sameReviewArea(finding: ReviewFinding, comment: ReviewComment): boolean {
+function sameReviewArea(finding, comment) {
   const location = finding.location;
   if (!location?.filePath || location.filePath !== comment.path) return false;
   const line = location.endLine ?? location.line;
   return line === undefined || comment.line === undefined || Math.abs(line - comment.line) <= 3;
 }
 
-function commentsDescribeSameIssue(finding: ReviewFinding, comment: ReviewComment): boolean {
+function commentsDescribeSameIssue(finding, comment) {
   const findingTerms = significantTerms(
     [finding.title, finding.body, finding.suggestion].filter(Boolean).join(" "),
   );
@@ -333,7 +240,7 @@ function commentsDescribeSameIssue(finding: ReviewFinding, comment: ReviewCommen
   return sharedTerms >= 2 && sharedTerms / Math.min(findingTerms.size, commentTerms.size) >= 0.4;
 }
 
-function hasSubstantialNewContext(finding: ReviewFinding, comment: ReviewComment): boolean {
+function hasSubstantialNewContext(finding, comment) {
   const existingTerms = significantTerms(comment.body);
   const addedTerms = [...significantTerms(finding.body)].filter((term) => !existingTerms.has(term));
   return (
@@ -342,7 +249,7 @@ function hasSubstantialNewContext(finding: ReviewFinding, comment: ReviewComment
   );
 }
 
-function significantTerms(value: string): Set<string> {
+function significantTerms(value) {
   return new Set(
     value
       .toLowerCase()
@@ -352,18 +259,15 @@ function significantTerms(value: string): Set<string> {
   );
 }
 
-export function renderPostPrReviewPayload(
-  drafts: readonly ReviewCommentDraft[],
-  commitId?: string,
-): PostPrReviewPayload {
+export function renderPostPrReviewPayload(drafts, commitId) {
   const payload = {
-    event: "COMMENT" as const,
+    event: "COMMENT",
     comments: drafts.map(renderPayloadComment),
   };
   return commitId ? { ...payload, commit_id: commitId } : payload;
 }
 
-function renderFindingCode(finding: ReviewFinding): string {
+function renderFindingCode(finding) {
   if (finding.replacement !== undefined)
     return fencedCode("suggestion", trimOuterNewlines(finding.replacement));
   if (!finding.example?.code.trim()) return "";
@@ -373,25 +277,25 @@ function renderFindingCode(finding: ReviewFinding): string {
   );
 }
 
-function fencedCode(language: string, code: string): string {
+function fencedCode(language, code) {
   return `\`\`\`${language}\n${code}\n\`\`\``;
 }
 
-function trimOuterNewlines(code: string): string {
+function trimOuterNewlines(code) {
   return code.replace(/^\n+|\n+$/g, "");
 }
 
-function safeCodeLanguage(language: string | undefined): string {
+function safeCodeLanguage(language) {
   return language && /^[a-z0-9+-]+$/i.test(language) ? language : "ts";
 }
 
-function codeExplanationLabel(finding: ReviewFinding): string {
+function codeExplanationLabel(finding) {
   if (finding.type === "question") return "Question";
   return finding.replacement !== undefined ? "Why" : "Prefer";
 }
 
-function findingTypeLabel(finding: ReviewFinding): string {
-  const labels: Record<ReviewFinding["type"], string> = {
+function findingTypeLabel(finding) {
+  const labels = {
     bug: "Bug",
     security: "Security",
     performance: "Performance",
@@ -404,14 +308,14 @@ function findingTypeLabel(finding: ReviewFinding): string {
   return labels[finding.type];
 }
 
-function validStartLine(startLine: number | undefined, line: number): number | undefined {
+function validStartLine(startLine, line) {
   return typeof startLine === "number" && Number.isFinite(startLine) && startLine < line
     ? startLine
     : undefined;
 }
 
-function renderPayloadComment(draft: ReviewCommentDraft): PostPrReviewPayloadComment {
-  const comment: PostPrReviewPayloadComment = {
+function renderPayloadComment(draft) {
+  const comment = {
     path: draft.path,
     line: draft.line,
     side: draft.side,
@@ -421,10 +325,10 @@ function renderPayloadComment(draft: ReviewCommentDraft): PostPrReviewPayloadCom
   return { ...comment, start_line: draft.startLine, start_side: draft.side };
 }
 
-function validateFindingCommentQuality(finding: ReviewFinding): PostingValidationMessage[] {
+function validateFindingCommentQuality(finding) {
   const text = [finding.title, finding.body, finding.suggestion].filter(Boolean).join(" ");
   const normalized = normalizeProse(text);
-  const messages: PostingValidationMessage[] = [];
+  const messages = [];
 
   if (finding.title.trim().length > 72) {
     messages.push(commentQualityError(finding, "Finding title exceeds 72 characters."));
@@ -487,37 +391,37 @@ function validateFindingCommentQuality(finding: ReviewFinding): PostingValidatio
   return messages;
 }
 
-function commentQualityError(finding: ReviewFinding, message: string): PostingValidationMessage {
+function commentQualityError(finding, message) {
   return { level: "error", findingId: finding.id, message };
 }
 
-function renderedProseParts(finding: ReviewFinding): string[] {
+function renderedProseParts(finding) {
   if (finding.replacement !== undefined || finding.example) return [finding.body];
   return [finding.title, finding.body, finding.suggestion ?? ""];
 }
 
-function renderedProse(finding: ReviewFinding): string {
+function renderedProse(finding) {
   return normalizeProse(renderedProseParts(finding).filter(Boolean).join(" "));
 }
 
-function renderedSentenceCount(finding: ReviewFinding): number {
+function renderedSentenceCount(finding) {
   return renderedProseParts(finding)
     .map(normalizeProse)
     .filter(Boolean)
     .reduce((count, part) => count + Math.max(1, part.match(/[.!?](?=\s|$)/g)?.length ?? 0), 0);
 }
 
-function isRepeatedTitle(finding: ReviewFinding): boolean {
+function isRepeatedTitle(finding) {
   const title = normalizeProse(finding.title).toLowerCase();
   const body = normalizeProse(finding.body).toLowerCase();
   return Boolean(title && body && title === body);
 }
 
-function normalizeProse(text: string): string {
+function normalizeProse(text) {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function isPraiseOnly(text: string): boolean {
+function isPraiseOnly(text) {
   return (
     /\b(nice|good job|great job|clean code|well done|looks good)\b/i.test(text) &&
     !/(missing|fails?|breaks?|bug|risk|should|consider|why|what|how|rename|extract|add|remove|replace|use)\b/i.test(
@@ -526,13 +430,13 @@ function isPraiseOnly(text: string): boolean {
   );
 }
 
-function isCiCatchable(text: string): boolean {
+function isCiCatchable(text) {
   return /\b(formatting|format|prettier|biome|eslint|lint|typecheck|type error|import order|unused import)\b/i.test(
     text,
   );
 }
 
-function isAbstractObservation(text: string): boolean {
+function isAbstractObservation(text) {
   return (
     /\b(this could be better|interesting approach|seems odd|not ideal|cleaner way)\b/i.test(text) &&
     !/(\?|suggest|consider|because|will|can fail|fails?|missing|rename|extract|replace|add|remove|use)\b/i.test(
@@ -541,11 +445,7 @@ function isAbstractObservation(text: string): boolean {
   );
 }
 
-function validateDraftChangedLine(
-  draft: ReviewCommentDraft,
-  location: ReviewFindingLocation | undefined,
-  hunks: readonly DiffHunk[],
-): PostingValidationMessage | undefined {
+function validateDraftChangedLine(draft, location, hunks) {
   const fileHunks = hunks.filter((hunk) => hunk.filePath === draft.path);
   if (!fileHunks.length) {
     return {
@@ -566,7 +466,7 @@ function validateDraftChangedLine(
   };
 }
 
-function matchesChangedLine(line: DiffLine, targetLine: number, side: "LEFT" | "RIGHT"): boolean {
+function matchesChangedLine(line, targetLine, side) {
   if (side === "LEFT") return line.kind === "delete" && line.oldLineNumber === targetLine;
   return line.kind === "add" && line.newLineNumber === targetLine;
 }
