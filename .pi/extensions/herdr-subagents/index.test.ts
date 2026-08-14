@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { piArgsForSpec } from "./index";
+import { piArgsForSpec, shouldPlayMainAgentSound } from "./index";
 import {
   agentNameForSpec,
   formatQuestionForMainAgent,
@@ -55,10 +55,37 @@ describe("piArgsForSpec", () => {
     ]);
   });
 
+  test("keeps inline system prompts safe for Herdr agent startup", () => {
+    expect(piArgsForSpec({ systemPrompt: "First line.\nSecond line." }, "/repo")).toEqual([
+      "--model",
+      "openai-codex/gpt-5.6-sol",
+      "--append-system-prompt",
+      "First line. Second line.",
+    ]);
+  });
+
+  test("uses a prompt file path when one is prepared for startup", () => {
+    const promptPath = "/repo/.pi/tmp/herdr-subagents/worker.system-prompt.md";
+    expect(
+      piArgsForSpec({ systemPrompt: "First line.\nSecond line." }, "/repo", promptPath),
+    ).toContain(promptPath);
+  });
+
   test("allows an absolute worktree cwd but rejects external skill files", () => {
     expect(() =>
       piArgsForSpec({ cwd: "/repo-worktree", skills: ["../secret.md"] }, "/repo"),
     ).toThrow("Subagent skill must stay inside /repo: ../secret.md");
+  });
+});
+
+describe("main-agent sound", () => {
+  test("plays only for an unfocused main Herdr agent", () => {
+    expect(shouldPlayMainAgentSound({ HERDR_ENV: "1" }, false)).toBe(true);
+    expect(shouldPlayMainAgentSound({ HERDR_ENV: "1", PI_SUBAGENT_ID: "worker" }, false)).toBe(
+      false,
+    );
+    expect(shouldPlayMainAgentSound({ HERDR_ENV: "1" }, true)).toBe(false);
+    expect(shouldPlayMainAgentSound({}, false)).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 import { runPrReviewProcess } from "../process.ts";
 import { runPrCreateCommand } from "./pr-create.js";
-import { runPrUpdateCommand } from "./pr-update.js";
+import { fixPrUpdateStaleDocs, runPrUpdateCommand } from "./pr-update.js";
 import {
   demoSummary,
   openLatestVisual,
@@ -13,10 +13,12 @@ import {
   showWidget,
 } from "./review.js";
 import { createReviewReportRenderer } from "./rendering.js";
+import { registerPrReviewHunkIntegration } from "./hunk.js";
 
 const REVIEW_REPORT_MESSAGE_TYPE = "pr-review-report";
 
 export function registerPrReviewExtension(pi) {
+  registerPrReviewHunkIntegration(pi);
   pi.registerMessageRenderer(REVIEW_REPORT_MESSAGE_TYPE, (message) => {
     const markdown =
       message.details?.markdown ?? (typeof message.content === "string" ? message.content : "");
@@ -26,8 +28,7 @@ export function registerPrReviewExtension(pi) {
   pi.registerCommand("pr-create", {
     description:
       "Create or update a GitHub PR from the current branch (usage: /pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--screenshots <file>] [--skip-screenshots])",
-    handler: async (args, ctx) =>
-      runPrCreateCommand(pi, ctx, args, runPrUpdateCommand.fixStaleDocs),
+    handler: async (args, ctx) => runPrCreateCommand(pi, ctx, args, fixPrUpdateStaleDocs),
   });
   pi.registerCommand("pr-update", {
     description:

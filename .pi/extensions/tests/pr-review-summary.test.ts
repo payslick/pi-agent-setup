@@ -45,12 +45,15 @@ describe("pr review executive summary", () => {
             functionName: "writeInvoiceCsv",
           },
         },
-      ])
+      ]),
     );
 
     expect(markdown).toContain("| # | File | Issue |");
     expect(markdown).toContain(
-      "| 🟡1 | ...eatures/billing/invoices/export/csv-writer.ts :128 #writeInvoiceCsv | 🐛 CSV escaping can corrupt rows |"
+      "press `Space`, the issue number, then `Enter` to open its code in a focused Herdr tab",
+    );
+    expect(markdown).toContain(
+      "| 🟡1 | ...eatures/billing/invoices/export/csv-writer.ts :128 #writeInvoiceCsv | 🐛 CSV escaping can corrupt rows |",
     );
   });
 
@@ -88,7 +91,7 @@ describe("pr review executive summary", () => {
     });
 
     expect(markdown).toContain(
-      "| G1 | — | **Custom migration guide still has ambiguous or unsafe instructions**"
+      "| G1 | — | **Custom migration guide still has ambiguous or unsafe instructions**",
     );
     expect(markdown).toContain("Applies to #1–#2.");
   });

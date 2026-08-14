@@ -62,7 +62,8 @@ function selectedReviewAgentModel(ctx) {
   return REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 }
 
-function reviewAgentArguments(ctx, input) {
+function buildReviewAgentArguments(ctx, input) {
+  const shellSafeSystemPrompt = input.systemPrompt.replace(/\s+/g, " ").trim();
   return [
     ...(input.model ? ["--model", input.model] : []),
     "--thinking",
@@ -79,7 +80,7 @@ function reviewAgentArguments(ctx, input) {
     "--no-prompt-templates",
     "--no-context-files",
     "--system-prompt",
-    input.systemPrompt,
+    shellSafeSystemPrompt,
   ];
 }
 
@@ -102,7 +103,7 @@ export async function runCiAnalysisLaneAgent(pi, ctx, prMetadata, ciStatus, shar
     "review-agent-tool-guard.ts",
     reviewAgentToolGuardSource(getLaneDir(ctx, laneId), sharedArtifacts.sharedDir),
   );
-  const agentArguments = reviewAgentArguments(ctx, {
+  const agentArguments = buildReviewAgentArguments(ctx, {
     laneId,
     prompt,
     model: selectedReviewAgentModel(ctx),
@@ -196,7 +197,7 @@ async function prepareLaneAgentRun(ctx, prMetadata, packet, sharedArtifacts) {
     packet.laneId === "dedupe" && !REVIEW_AGENT_ENABLE_TOOLS
       ? DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS
       : REVIEW_AGENT_ALLOWED_TOOLS;
-  const agentArguments = reviewAgentArguments(ctx, {
+  const agentArguments = buildReviewAgentArguments(ctx, {
     laneId: packet.laneId,
     prompt,
     model: selectedReviewAgentModel(ctx),
@@ -290,16 +291,14 @@ async function repairAgentFindings(pi, ctx, packet, stdout, writeArtifact) {
     "```",
   ].join("\n");
   const agentArguments = [
-    ...(selectedReviewAgentModel(ctx) ? ["--model", selectedReviewAgentModel(ctx)] : []),
-    "--thinking",
-    "off",
-    "--no-tools",
+    ...buildReviewAgentArguments(ctx, {
+      laneId: packet.laneId,
+      model: selectedReviewAgentModel(ctx),
+      toolsEnabled: false,
+      allowedTools: "",
+      systemPrompt: REVIEW_AGENT_SYSTEM_PROMPT,
+    }),
     "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-context-files",
-    "--system-prompt",
-    REVIEW_AGENT_SYSTEM_PROMPT,
   ];
   try {
     const result = await runPiAgentInHerdr(pi, ctx, {

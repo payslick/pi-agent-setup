@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runCiWatcher, showWidget } from "./review.js";
+import { runCiWatcher } from "./review-ci.js";
+import { showWidget } from "./review-reports.js";
 
 const FINITO_SCRIPT_DIRECTORIES = [
   path.join(".pi", "finito-scripts", "scripts"),

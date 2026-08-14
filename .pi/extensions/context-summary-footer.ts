@@ -18,10 +18,19 @@ const MAX_SUMMARY_CHARS = 180;
 let summaryText = "Starting up…";
 let agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
 let summarizeInFlight = false;
-let pendingRefresh = false;
+let pendingSummaryRequest: SummaryRequest | undefined;
+let sessionGeneration = 0;
 let requestFooterRender: (() => void) | undefined;
 let lastPrompt = "";
 let thinkingLevel = "";
+
+interface SummaryRequest {
+  said: string;
+  fallback: string;
+  cwd: string;
+  signal: AbortSignal | undefined;
+  generation: number;
+}
 
 interface CommandResult {
   stdout: string;
@@ -175,36 +184,54 @@ function heuristicSummary(ctx: ExtensionContext): string {
   return trimSentence(latest);
 }
 
-async function refreshSummary(ctx: ExtensionContext, force = false): Promise<void> {
-  if (!ctx.hasUI) return;
-  if (summarizeInFlight) {
-    pendingRefresh = true;
-    return;
-  }
-  if (!force && agentTurnsSinceRefresh < REFRESH_EVERY_AGENT_TURNS) return;
+function createSummaryRequest(ctx: ExtensionContext): SummaryRequest {
+  return {
+    said: userSaid(ctx),
+    fallback: heuristicSummary(ctx),
+    cwd: ctx.cwd,
+    signal: ctx.signal,
+    generation: sessionGeneration,
+  };
+}
 
+function applySummary(request: SummaryRequest, value: string): void {
+  if (request.generation !== sessionGeneration) return;
+  summaryText = value;
+}
+
+async function processSummaryRequest(request: SummaryRequest): Promise<void> {
   summarizeInFlight = true;
-  pendingRefresh = false;
   agentTurnsSinceRefresh = 0;
   try {
-    const said = userSaid(ctx);
-    if (!said.trim()) {
-      summaryText = heuristicSummary(ctx);
+    if (!request.said.trim()) {
+      applySummary(request, request.fallback);
       return;
     }
-    const prompt = `Summarize the user's last few turns into exactly one short sentence for a footer reminder. Use only the user turns below (ignore assistant/tool context).\n\nRecent user turns:\n${said}`;
-    const result = await runPiSummarizer(prompt, ctx.cwd, ctx.signal);
-    summaryText =
-      result.code === 0 && result.stdout.trim()
-        ? trimSentence(result.stdout)
-        : heuristicSummary(ctx);
+    const prompt = `Summarize the user's last few turns into exactly one short sentence for a footer reminder. Use only the user turns below (ignore assistant/tool context).\n\nRecent user turns:\n${request.said}`;
+    const result = await runPiSummarizer(prompt, request.cwd, request.signal);
+    const nextSummary =
+      result.code === 0 && result.stdout.trim() ? trimSentence(result.stdout) : request.fallback;
+    applySummary(request, nextSummary);
   } catch {
-    summaryText = heuristicSummary(ctx);
+    applySummary(request, request.fallback);
   } finally {
     summarizeInFlight = false;
     requestFooterRender?.();
-    if (pendingRefresh) void refreshSummary(ctx, true);
+    const pending = pendingSummaryRequest;
+    pendingSummaryRequest = undefined;
+    if (pending) void processSummaryRequest(pending);
   }
+}
+
+async function refreshSummary(ctx: ExtensionContext, force = false): Promise<void> {
+  if (!ctx.hasUI) return;
+  if (!force && agentTurnsSinceRefresh < REFRESH_EVERY_AGENT_TURNS) return;
+  const request = createSummaryRequest(ctx);
+  if (summarizeInFlight) {
+    pendingSummaryRequest = request;
+    return;
+  }
+  await processSummaryRequest(request);
 }
 
 function formatTokens(count: number): string {
@@ -222,6 +249,14 @@ function alignSides(left: string, right: string, width: number, ellipsis: string
   const fittedLeft = truncateToWidth(left, leftWidth, ellipsis);
   const padding = " ".repeat(width - visibleWidth(fittedLeft) - rightWidth);
   return `${fittedLeft}${padding}${right}`;
+}
+
+function formatCwd(cwd: string): string {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (home && cwd.startsWith(home)) cwd = `~${cwd.slice(home.length)}`;
+  const worktreePrefix = "~/payslick/app/wt/";
+  if (cwd.startsWith(worktreePrefix)) return cwd.slice(worktreePrefix.length);
+  return cwd.startsWith("~/payslick/") ? cwd.slice("~/payslick/".length) : cwd;
 }
 
 function installFooter(ctx: ExtensionContext): void {
@@ -251,9 +286,7 @@ function installFooter(ctx: ExtensionContext): void {
           ([key]) => key !== SUMMARY_KEY,
         );
         const prStatus = statusEntries.find(([key]) => key === BRANCH_PR_STATUS_KEY)?.[1];
-        let cwd = ctx.sessionManager.getCwd();
-        const home = process.env.HOME || process.env.USERPROFILE;
-        if (home && cwd.startsWith(home)) cwd = `~${cwd.slice(home.length)}`;
+        let cwd = formatCwd(ctx.sessionManager.getCwd());
         const branch = footerData.getGitBranch();
         if (branch) cwd = `${cwd} (${branch})`;
         if (prStatus) cwd = `${cwd} ${prStatus}`;
@@ -327,6 +360,7 @@ function installFooter(ctx: ExtensionContext): void {
 
 export default function contextSummaryFooter(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
+    sessionGeneration += 1;
     summaryText = heuristicSummary(ctx);
     agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
     thinkingLevel = pi.getThinkingLevel();
@@ -351,6 +385,8 @@ export default function contextSummaryFooter(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    sessionGeneration += 1;
+    pendingSummaryRequest = undefined;
     if (ctx.hasUI) ctx.ui.setFooter(undefined);
     requestFooterRender = undefined;
     lastPrompt = "";

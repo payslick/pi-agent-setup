@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Static } from "typebox";
@@ -92,6 +93,12 @@ function parseRange(raw: string): FileLineRange {
   }
 
   return { raw, file: trimmed, startLine: 1, endLine: WHOLE_FILE_END };
+}
+
+export function formatReadManySpec(raw: string): string {
+  const range = parseRange(raw);
+  const endLine = range.endLine === WHOLE_FILE_END ? "end" : String(range.endLine);
+  return `${range.file}:${range.startLine}-${endLine}`;
 }
 
 function resolveInsideRoot(root: string, filePath: string): string | null {
@@ -315,6 +322,14 @@ export default function readManyFilesLines(pi: ExtensionAPI) {
         content: [{ type: "text" as const, text: chunks.join("\n") }],
         details: { files: ranges.length },
       };
+    },
+    renderCall(params, theme) {
+      const title = theme.fg("toolTitle", theme.bold(TOOL_NAME));
+      const ranges = theme.fg("toolOutput", params.specs.map(formatReadManySpec).join("\n"));
+      return new Text(`${title}\n${ranges}`, 0, 0);
+    },
+    renderResult() {
+      return new Text("", 0, 0);
     },
   });
 

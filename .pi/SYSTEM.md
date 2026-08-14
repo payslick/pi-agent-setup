@@ -14,3 +14,5 @@ implementations before broad manual searching.
 when coding always prefer naming and using helper functions to comments. do not add comments unless there's no way to use a const or a named fn to express the meaning
 
 when coding, make sure the code is compact, deduped, abstarcted enough to reuse code as much as possible
+
+When posting any GitHub comment, end it on a new line with a lowercase model signature. For review comments, include the review focus before the model, such as `[security - gpt-5.6-sol]` or `[dedupe - gpt-5.6-sol]`. Consolidate the same issue reported by multiple review agents into one comment and alphabetically chain their focuses, such as `[dedupe, security - gpt-5.6-sol]`. For comments outside a review, use only `[gpt-5.6-sol]`.

@@ -21,6 +21,8 @@ describe("pr review plain JavaScript runtime", () => {
     const commands: string[] = [];
     const renderers: string[] = [];
     prReviewExtension({
+      events: { on: () => () => {} },
+      on: () => {},
       registerCommand: (name: string) => commands.push(name),
       registerMessageRenderer: (name: string) => renderers.push(name),
     });

@@ -49,7 +49,14 @@ export function renderExecutiveSummary(input, options = {}) {
     return lines.join("\n");
   }
 
-  lines.push("", "### Issues", "", `Severity: ${formatSeverityLegend()}`, "");
+  lines.push(
+    "",
+    "### Issues",
+    "",
+    `Severity: ${formatSeverityLegend()}`,
+    "Hunk: in Vim normal mode, press `Space`, the issue number, then `Enter` to open its code in a focused Herdr tab.",
+    "",
+  );
   lines.push("| # | File | Issue |");
   lines.push("|---:|---|---|");
 

@@ -126,6 +126,7 @@ describe("post-edit validation prompt", () => {
     const second = appendPostEditValidationInstructions(first);
 
     expect(first).toContain("Post-edit validation discipline:");
+    expect(first).toContain("Never send an assistant response solely to acknowledge one");
     expect(second).toBe(first);
   });
 });

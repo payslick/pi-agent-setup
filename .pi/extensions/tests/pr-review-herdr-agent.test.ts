@@ -11,6 +11,8 @@ import {
 
 const originalHerdrEnv = process.env.HERDR_ENV;
 const originalWorkspaceId = process.env.HERDR_WORKSPACE_ID;
+const originalStartMaxAttempts = process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS;
+const originalStartRetryDelay = process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS;
 
 beforeEach(() => {
   process.env.HERDR_ENV = "1";
@@ -22,6 +24,11 @@ afterEach(() => {
   else process.env.HERDR_ENV = originalHerdrEnv;
   if (originalWorkspaceId === undefined) delete process.env.HERDR_WORKSPACE_ID;
   else process.env.HERDR_WORKSPACE_ID = originalWorkspaceId;
+  if (originalStartMaxAttempts === undefined) delete process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS;
+  else process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS = originalStartMaxAttempts;
+  if (originalStartRetryDelay === undefined)
+    delete process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS;
+  else process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = originalStartRetryDelay;
 });
 
 describe("PR review Herdr agents", () => {
@@ -110,7 +117,13 @@ describe("PR review Herdr agents", () => {
         {
           label: "PR-correctness",
           prompt: "Review the PR",
-          piArgs: ["--model", "openai-codex/gpt-5.6-sol", "--no-tools"],
+          piArgs: [
+            "--model",
+            "openai-codex/gpt-5.6-sol",
+            "--no-tools",
+            "--system-prompt",
+            "Review the PR.\nReturn JSON only.",
+          ],
           timeout: 1_000,
         },
       );
@@ -124,6 +137,8 @@ describe("PR review Herdr agents", () => {
       expect(createCall?.some((argument) => argument.startsWith("PI_SUBAGENT_ID="))).toBeTrue();
       expect(startCall).toContain("pane-1");
       expect(startCall).not.toContain("--print");
+      expect(startCall?.every((argument) => !/[\r\n]/.test(argument))).toBeTrue();
+      expect(startCall).toContain("Review the PR. Return JSON only.");
       expect(promptCall).toContain("Review the PR");
       expect(promptCall).toContain("idle");
       expect(promptCall).toContain("done");
@@ -133,6 +148,195 @@ describe("PR review Herdr agents", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("retries when a new review pane is not ready yet", async () => {
+    process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS = "3";
+    process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = "0";
+    let startAttempts = 0;
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "start") {
+          startAttempts += 1;
+          if (startAttempts === 1) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: JSON.stringify({ error: { code: "agent_pane_busy" } }),
+            };
+          }
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    const result = await runPiAgentInHerdr(
+      pi as never,
+      { cwd: "/repo", signal: undefined } as never,
+      {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+        timeout: 1_000,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(startAttempts).toBe(2);
+  });
+
+  test("serializes pane creation and agent startup", async () => {
+    let tabCount = 0;
+    let activeStarts = 0;
+    let maximumActiveStarts = 0;
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        if (args[0] === "tab" && args[1] === "create") {
+          tabCount += 1;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                tab: { tab_id: `tab-${tabCount}` },
+                root_pane: { pane_id: `pane-${tabCount}` },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "start") {
+          activeStarts += 1;
+          maximumActiveStarts = Math.max(maximumActiveStarts, activeStarts);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          activeStarts -= 1;
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+    const runAgent = (label: string) =>
+      runPiAgentInHerdr(pi as never, { cwd: "/repo", signal: undefined } as never, {
+        label,
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+        timeout: 1_000,
+      });
+
+    await Promise.all([runAgent("PR-correctness"), runAgent("PR-tests")]);
+
+    expect(maximumActiveStarts).toBe(1);
+  });
+
+  test("notifies when a review pane stays busy after every retry", async () => {
+    process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS = "2";
+    process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = "0";
+    const notifications: Array<{ message: string; level: string }> = [];
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "start") {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: JSON.stringify({ error: { code: "agent_pane_busy" } }),
+          };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+    const ctx = {
+      cwd: "/repo",
+      signal: undefined,
+      hasUI: true,
+      ui: {
+        notify: (message: string, level: string) => notifications.push({ message, level }),
+      },
+    };
+
+    await expect(
+      runPiAgentInHerdr(pi as never, ctx as never, {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+        timeout: 1_000,
+      }),
+    ).rejects.toThrow("could not start after 2 attempts");
+    expect(calls.filter((args) => args[0] === "agent" && args[1] === "start")).toHaveLength(2);
+    expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.level).toBe("error");
+    expect(notifications[0]?.message).toContain("not an available shell");
+    expect(notifications[0]?.message).toContain("reported as omitted");
+  });
+
+  test("closes a blank review tab when agent startup fails", async () => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "start") {
+          return { code: 1, stdout: "", stderr: "invalid agent arguments" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    await expect(
+      runPiAgentInHerdr(pi as never, { cwd: "/repo", signal: undefined } as never, {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+        timeout: 1_000,
+      }),
+    ).rejects.toThrow("invalid agent arguments");
+    expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
   });
 
   test("routes review and post-review model calls through Herdr", async () => {

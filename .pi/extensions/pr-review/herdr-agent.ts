@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { setTimeout as wait } from "node:timers/promises";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 interface HerdrAgentSession {
@@ -159,6 +160,105 @@ export const silentReviewTabArgs = (
   "--no-focus",
 ];
 
+const shellSafePiArguments = (piArgs: readonly string[]): string[] =>
+  piArgs.map((argument, index) => {
+    const previousArgument = piArgs[index - 1];
+    if (previousArgument !== "--system-prompt" && previousArgument !== "--append-system-prompt")
+      return argument;
+    return argument.replace(/\s+/g, " ").trim();
+  });
+
+class ReviewAgentStartupError extends Error {}
+
+let reviewAgentStartupQueue = Promise.resolve();
+
+const withReviewAgentStartupLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+  const previousStartup = reviewAgentStartupQueue;
+  let releaseStartup!: () => void;
+  reviewAgentStartupQueue = new Promise<void>((resolve) => {
+    releaseStartup = resolve;
+  });
+  await previousStartup;
+  try {
+    return await operation();
+  } finally {
+    releaseStartup();
+  }
+};
+
+const herdrErrorCode = (error: unknown): string | undefined => {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    return (JSON.parse(message) as { error?: { code?: string } }).error?.code;
+  } catch {
+    return undefined;
+  }
+};
+
+const reviewAgentStartMaxAttempts = (): number => {
+  const configured = Number(process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS ?? 6);
+  return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 6;
+};
+
+const reviewAgentStartRetryDelay = (attempt: number): number => {
+  const configured = Number(process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS ?? 250);
+  const baseDelay = Number.isFinite(configured) ? Math.max(0, configured) : 250;
+  return Math.min(4_000, baseDelay * 2 ** Math.max(0, attempt - 1));
+};
+
+const startReviewAgent = async (
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  input: HerdrPiAgentInput,
+  cwd: string,
+  label: string,
+  agentName: string,
+  paneId: string,
+): Promise<void> => {
+  const maxAttempts = reviewAgentStartMaxAttempts();
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await runHerdr<HerdrAgentResult>(
+        pi,
+        ctx,
+        [
+          "agent",
+          "start",
+          agentName,
+          "--kind",
+          "pi",
+          "--pane",
+          paneId,
+          "--timeout",
+          "60000",
+          "--",
+          ...shellSafePiArguments(input.piArgs),
+          "--name",
+          label,
+        ],
+        cwd,
+        70_000,
+      );
+      return;
+    } catch (error) {
+      if (herdrErrorCode(error) !== "agent_pane_busy") throw error;
+      if (attempt === maxAttempts) {
+        throw new ReviewAgentStartupError(
+          `PR review lane "${label}" could not start after ${maxAttempts} attempts because Herdr kept reporting that its new pane was not an available shell. The empty tab was closed and this lane will be reported as omitted.`,
+        );
+      }
+      await wait(reviewAgentStartRetryDelay(attempt), undefined, { signal: ctx.signal });
+    }
+  }
+};
+
+const notifyReviewAgentStartupFailure = (
+  ctx: ExtensionCommandContext,
+  error: ReviewAgentStartupError,
+): void => {
+  if (ctx.hasUI) ctx.ui.notify(error.message, "error");
+};
+
 export const runPiAgentInHerdr = async (
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
@@ -171,37 +271,28 @@ export const runPiAgentInHerdr = async (
   const subagentId = randomUUID();
   const label = compactLabel(input.label);
   const agentName = `${safeName(label).slice(0, 22)}-${subagentId.replace(/-/g, "").slice(0, 8)}`;
-  const created = await runHerdr<HerdrTabResult>(
-    pi,
-    ctx,
-    silentReviewTabArgs(workspaceId, cwd, label, subagentId, agentName),
-    cwd,
-  );
-  const tabId = created.tab?.tab_id;
-  const paneId = created.root_pane?.pane_id;
-  if (!tabId || !paneId) throw new Error("Herdr did not return a review-agent tab and pane.");
+  const { tabId } = await withReviewAgentStartupLock(async () => {
+    const created = await runHerdr<HerdrTabResult>(
+      pi,
+      ctx,
+      silentReviewTabArgs(workspaceId, cwd, label, subagentId, agentName),
+      cwd,
+    );
+    const createdTabId = created.tab?.tab_id;
+    const paneId = created.root_pane?.pane_id;
+    if (!createdTabId || !paneId)
+      throw new Error("Herdr did not return a review-agent tab and pane.");
 
-  await runHerdr<HerdrAgentResult>(
-    pi,
-    ctx,
-    [
-      "agent",
-      "start",
-      agentName,
-      "--kind",
-      "pi",
-      "--pane",
-      paneId,
-      "--timeout",
-      "60000",
-      "--",
-      ...input.piArgs,
-      "--name",
-      label,
-    ],
-    cwd,
-    70_000,
-  );
+    try {
+      await startReviewAgent(pi, ctx, input, cwd, label, agentName, paneId);
+    } catch (error) {
+      await runHerdr(pi, ctx, ["tab", "close", createdTabId], cwd).catch(() => undefined);
+      if (error instanceof ReviewAgentStartupError) notifyReviewAgentStartupFailure(ctx, error);
+      throw error;
+    }
+    return { tabId: createdTabId };
+  });
+
   await runHerdr<HerdrAgentResult>(
     pi,
     ctx,

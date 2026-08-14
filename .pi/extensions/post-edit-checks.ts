@@ -42,6 +42,11 @@ interface ActiveValidationRun {
   controller: AbortController;
 }
 
+interface DeferredValidationIssue {
+  batch: ValidationBatch;
+  issue: ValidationIssue;
+}
+
 interface ValidationCommandOptions {
   runUnitTests?: boolean;
 }
@@ -65,8 +70,10 @@ const WARNING_RE = /\b(warnings?|deprecated|deprecation)\b/i;
 const VALIDATION_PROMPT_MARKER = "Post-edit validation discipline:";
 const POST_EDIT_VALIDATION_INSTRUCTIONS = `${VALIDATION_PROMPT_MARKER}
 - Background post-edit validation runs configured format, check, typecheck, and unit-test scripts after file edits.
-- Do not run manual format/check/typecheck/test commands just to validate a completed edit batch; wait for "code passes" or issue reports.
-- Run validation manually only when the user explicitly asks, no background result arrives, or you need a targeted diagnostic after a reported issue.`;
+- Do not run manual format/check/typecheck/test commands just to validate a completed edit batch; passing and stale results stay hidden.
+- Run validation manually only when the user explicitly asks or you need a targeted diagnostic after a reported issue.
+- Validation issues are delivered privately first so you can fix them; only unresolved issues are shown after your run settles.
+- Validation reports are status notifications, not user requests. Never send an assistant response solely to acknowledge one.`;
 const DEFAULT_BATCH_DELAY_MS = numberFromEnv("PI_POST_EDIT_BATCH_DELAY_MS", 750);
 const DEFAULT_COMMAND_TIMEOUT_MS = numberFromEnv("PI_POST_EDIT_CHECK_TIMEOUT_MS", 120_000);
 const DEFAULT_MAX_OUTPUT_CHARS = numberFromEnv("PI_POST_EDIT_MAX_OUTPUT_CHARS", 6_000);
@@ -79,6 +86,7 @@ const activeEditToolCallIds = new Set<string>();
 const activeEditFallbackTimers = new Map<string, NodeJS.Timeout>();
 const editQuiescenceWaiters = new Set<() => void>();
 const pendingFiles = new Set<string>();
+let deferredValidationIssues: DeferredValidationIssue[] = [];
 
 function numberFromEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -207,6 +215,7 @@ function releaseEditToolCall(pi: ExtensionAPI, ctx: ExtensionContext, toolCallId
 
 function markEditToolCallActive(pi: ExtensionAPI, ctx: ExtensionContext, toolCallId: string): void {
   activeEditToolCallIds.add(toolCallId);
+  setValidationStatus(ctx, undefined);
   clearEditFallbackTimer(toolCallId);
   const timeout = setTimeout(
     () => releaseEditToolCall(pi, ctx, toolCallId),
@@ -231,6 +240,7 @@ function resetValidationState(): void {
   activeEditFallbackTimers.clear();
   resolveEditQuiescenceWaiters();
   pendingFiles.clear();
+  deferredValidationIssues = [];
 }
 
 function terminateActiveRun(): void {
@@ -416,20 +426,25 @@ export function formatValidationIssueOutput(
     .join("\n");
 }
 
-function messageOptions(ctx: ExtensionContext, triggerTurn: boolean) {
-  const options: { triggerTurn?: boolean; deliverAs?: "followUp" } = {};
-  if (triggerTurn) options.triggerTurn = true;
-  if (!ctx.isIdle()) options.deliverAs = "followUp";
-  return Object.keys(options).length > 0 ? options : undefined;
-}
-
-function sendValidationMessage(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  message: Parameters<ExtensionAPI["sendMessage"]>[0],
-  triggerTurn: boolean,
-): void {
-  pi.sendMessage(message, messageOptions(ctx, triggerTurn));
+function validationMessage(
+  batch: ValidationBatch,
+  issue: ValidationIssue,
+  display: boolean,
+): Parameters<ExtensionAPI["sendMessage"]>[0] {
+  return {
+    customType: "post-edit-checks",
+    content: formatValidationIssueOutput(batch.files, issue),
+    display,
+    details: {
+      revision: batch.revision,
+      files: batch.files,
+      kind: issue.kind,
+      lane: issue.command.lane,
+      command: issue.result.command,
+      exitCode: issue.result.exitCode,
+      timedOut: issue.result.timedOut,
+    },
+  };
 }
 
 function reportIssue(
@@ -439,44 +454,14 @@ function reportIssue(
   issue: ValidationIssue,
 ): void {
   setValidationStatus(ctx, issue.kind === "warning" ? "checks:warning" : "checks:failed");
-  sendValidationMessage(
-    pi,
-    ctx,
-    {
-      customType: "post-edit-checks",
-      content: formatValidationIssueOutput(batch.files, issue),
-      display: true,
-      details: {
-        revision: batch.revision,
-        files: batch.files,
-        kind: issue.kind,
-        lane: issue.command.lane,
-        command: issue.result.command,
-        exitCode: issue.result.exitCode,
-        timedOut: issue.result.timedOut,
-      },
-    },
-    true,
-  );
+  deferredValidationIssues.push({ batch, issue });
+  pi.sendMessage(validationMessage(batch, issue, false), { triggerTurn: true });
 }
 
-function reportPass(pi: ExtensionAPI, ctx: ExtensionContext, batch: ValidationBatch): void {
-  setValidationStatus(ctx, "checks:pass");
-  sendValidationMessage(
-    pi,
-    ctx,
-    {
-      customType: "post-edit-checks",
-      content: "code passes",
-      display: true,
-      details: {
-        revision: batch.revision,
-        files: batch.files,
-        commands: batch.commands.map((command) => command.label),
-      },
-    },
-    false,
-  );
+function reportDeferredIssues(pi: ExtensionAPI): void {
+  const issues = deferredValidationIssues.filter(({ batch }) => batch.revision === editRevision);
+  deferredValidationIssues = [];
+  for (const { batch, issue } of issues) pi.sendMessage(validationMessage(batch, issue, true));
 }
 
 function reportBackgroundError(
@@ -487,17 +472,12 @@ function reportBackgroundError(
 ): void {
   const message = error instanceof Error ? error.message : String(error);
   setValidationStatus(ctx, "checks:error");
-  sendValidationMessage(
-    pi,
-    ctx,
-    {
-      customType: "post-edit-checks",
-      content: `Post-edit validation extension failed: ${message}`,
-      display: true,
-      details: { revision: batch?.revision, files: batch?.files, error: message },
-    },
-    true,
-  );
+  pi.sendMessage({
+    customType: "post-edit-checks",
+    content: `Post-edit validation extension failed: ${message}`,
+    display: true,
+    details: { revision: batch?.revision, files: batch?.files, error: message },
+  });
 }
 
 function isCurrentBatch(revision: number, signal: AbortSignal): boolean {
@@ -521,7 +501,6 @@ async function runValidationBatch(
   }
 
   let issues = 0;
-  setValidationStatus(ctx, `checks:running ${batch.commands.length}`);
   for (const wave of validationCommandWaves(batch.commands)) {
     await Promise.all(
       wave.map(async (command) => {
@@ -538,7 +517,7 @@ async function runValidationBatch(
   }
 
   await waitForEditQuiescence();
-  if (issues === 0 && isCurrentBatch(batch.revision, signal)) reportPass(pi, ctx, batch);
+  if (issues === 0 && isCurrentBatch(batch.revision, signal)) setValidationStatus(ctx, undefined);
 }
 
 async function launchPendingBatch(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -603,6 +582,8 @@ function queueAffectedPaths(
 
   editRevision += 1;
   terminateActiveRun();
+  deferredValidationIssues = [];
+  setValidationStatus(ctx, undefined);
   for (const file of files) pendingFiles.add(file);
   schedulePendingBatch(pi, ctx);
 }
@@ -622,6 +603,8 @@ export default function postEditChecks(pi: ExtensionAPI) {
     const systemPrompt = appendPostEditValidationInstructions(event.systemPrompt);
     return systemPrompt === event.systemPrompt ? undefined : { systemPrompt };
   });
+
+  pi.on("agent_settled", () => reportDeferredIssues(pi));
 
   pi.on("tool_call", (event, ctx) => {
     if (!isFileMutationToolName(event.toolName)) return;

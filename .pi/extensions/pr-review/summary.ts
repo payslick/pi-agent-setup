@@ -35,7 +35,7 @@ export interface RenderExecutiveSummaryOptions {
 
 export function renderExecutiveSummary(
   input: ExecutiveSummaryInput,
-  options: RenderExecutiveSummaryOptions = {}
+  options: RenderExecutiveSummaryOptions = {},
 ): string {
   const findings = [...input.findings];
   const maxPathLength = options.maxPathLength ?? DEFAULT_MAX_PATH_LENGTH;
@@ -56,7 +56,7 @@ export function renderExecutiveSummary(
     lines.push("", "### Omitted lane reasons", "", "| Lane | Reason |", "|---|---|");
     for (const omitted of input.omittedLaneReasons) {
       lines.push(
-        `| ${escapeTableCell(`${laneIcon(omitted.laneId)} ${omitted.laneId}`)} | ${escapeTableCell(omitted.reason)} |`
+        `| ${escapeTableCell(`${laneIcon(omitted.laneId)} ${omitted.laneId}`)} | ${escapeTableCell(omitted.reason)} |`,
       );
     }
   }
@@ -70,7 +70,7 @@ export function renderExecutiveSummary(
       lines.push(
         "",
         "No issues found in completed lanes.",
-        `Review incomplete: ${input.omittedLaneIds.length} lane(s) were omitted or failed.`
+        `Review incomplete: ${input.omittedLaneIds.length} lane(s) were omitted or failed.`,
       );
       return lines.join("\n");
     }
@@ -78,7 +78,14 @@ export function renderExecutiveSummary(
     return lines.join("\n");
   }
 
-  lines.push("", "### Issues", "", `Severity: ${formatSeverityLegend()}`, "");
+  lines.push(
+    "",
+    "### Issues",
+    "",
+    `Severity: ${formatSeverityLegend()}`,
+    "Hunk: in Vim normal mode, press `Space`, the issue number, then `Enter` to open its code in a focused Herdr tab.",
+    "",
+  );
   lines.push("| # | File | Issue |");
   lines.push("|---:|---|---|");
 
@@ -112,14 +119,14 @@ function renderCiStatusSection(ciStatus: ReviewCiStatus): string[] {
   }
 
   lines.push(
-    `Overall: ${ciStatusLabel(ciStatus.status)}${ciStatus.message ? ` — ${ciStatus.message}` : ""}`
+    `Overall: ${ciStatusLabel(ciStatus.status)}${ciStatus.message ? ` — ${ciStatus.message}` : ""}`,
   );
   if (!ciStatus.checks?.length) return lines;
 
   lines.push("", "| Check | State | Bucket | Workflow |", "|---|---|---|---|");
   for (const check of ciStatus.checks) {
     lines.push(
-      `| ${escapeTableCell(check.name)} | ${escapeTableCell(check.state || "unknown")} | ${escapeTableCell(check.bucket || "—")} | ${escapeTableCell(check.workflow || "—")} |`
+      `| ${escapeTableCell(check.name)} | ${escapeTableCell(check.state || "unknown")} | ${escapeTableCell(check.bucket || "—")} | ${escapeTableCell(check.workflow || "—")} |`,
     );
   }
   if (ciStatus.missingWorkflows?.length) {
@@ -148,7 +155,7 @@ function renderCoverageSection(coverage: ReviewSkillCoverage): string[] {
   const lines = ["### Review skill coverage", "", "| Area | Status | Details |", "|---|---|---|"];
   for (const item of coverage.items) {
     lines.push(
-      `| ${escapeTableCell(item.label)} | ${escapeTableCell(coverageStatusLabel(item.status))} | ${escapeTableCell(item.details || "—")} |`
+      `| ${escapeTableCell(item.label)} | ${escapeTableCell(coverageStatusLabel(item.status))} | ${escapeTableCell(item.details || "—")} |`,
     );
   }
   if (coverage.notes?.length) lines.push("", ...coverage.notes.map((note) => `- ${note}`));
@@ -204,7 +211,7 @@ function normalizeBodySummaryLine(rawLine: string): string {
   const withoutHeading = trimmed.replace(/^#+\s*/, "").trim();
   if (
     /^(why|what|summary|description|context|testing|tests|test plan|screenshots?|affected routes?|checklist|notes?|changes?)\s*:?$/i.test(
-      withoutHeading
+      withoutHeading,
     )
   ) {
     return "";
@@ -217,7 +224,7 @@ function normalizeBodySummaryLine(rawLine: string): string {
 
 function summarizeFitForPurpose(
   findings: readonly ReviewFinding[],
-  omittedLaneCount: number
+  omittedLaneCount: number,
 ): string {
   if (findings.some((finding) => finding.severity === "blocker" || finding.severity === "high")) {
     return "No — significant review issues remain.";
@@ -229,7 +236,7 @@ function summarizeFitForPurpose(
 
 function summarizeMergeSafety(
   findings: readonly ReviewFinding[],
-  omittedLaneCount: number
+  omittedLaneCount: number,
 ): string {
   if (findings.some((finding) => finding.severity === "blocker"))
     return "No — blocker issues must be fixed first.";
@@ -243,16 +250,16 @@ function summarizeMergeSafety(
 
 export function orderFindingsForIssueTable(
   findings: readonly ReviewFinding[],
-  consolidations: readonly IssueConsolidation[] = []
+  consolidations: readonly IssueConsolidation[] = [],
 ): ReviewFinding[] {
   return buildIssueTableEntries(findings, consolidations).flatMap((entry) =>
-    entry.kind === "group" ? entry.findings : [entry.finding]
+    entry.kind === "group" ? entry.findings : [entry.finding],
   );
 }
 
 function buildIssueTableEntries(
   findings: readonly ReviewFinding[],
-  consolidations: readonly IssueConsolidation[] = []
+  consolidations: readonly IssueConsolidation[] = [],
 ): IssueTableEntry[] {
   const sorted = sortFindingsBySeverity(findings);
   const candidateByFinding = new Map<ReviewFinding, IssueGroupSpec>();
@@ -261,7 +268,7 @@ function buildIssueTableEntries(
 
   for (const consolidation of consolidations) {
     const ids = [...new Set(consolidation.findingIds)].filter((id) =>
-      sorted.some((finding) => finding.id === id)
+      sorted.some((finding) => finding.id === id),
     );
     if (ids.length < 2) continue;
     const spec = {
@@ -300,7 +307,7 @@ function buildIssueTableEntries(
       kind: "group",
       spec,
       findings: sortFindingsBySeverity(
-        sorted.filter((candidate) => candidateByFinding.get(candidate)?.key === spec.key)
+        sorted.filter((candidate) => candidateByFinding.get(candidate)?.key === spec.key),
       ),
     });
   }
@@ -315,7 +322,7 @@ function classifyIssueGroup(finding: ReviewFinding): IssueGroupSpec | undefined 
     .trim();
   if (
     /(echo|echoed|expos|leak).*(validation error|error detail|identifier|\bid\b|pii|tax id|national id)/i.test(
-      text
+      text,
     )
   ) {
     return {
@@ -333,14 +340,14 @@ function sortFindingsBySeverity(findings: readonly ReviewFinding[]): ReviewFindi
     .map((finding, index) => ({ finding, index }))
     .sort(
       (a, b) =>
-        severityRank(a.finding.severity) - severityRank(b.finding.severity) || a.index - b.index
+        severityRank(a.finding.severity) - severityRank(b.finding.severity) || a.index - b.index,
     )
     .map((entry) => entry.finding);
 }
 
 function severityRank(severity: ReviewSeverity): number {
   const index = SEVERITY_GROUPS.findIndex((group) =>
-    (group.severities as readonly ReviewSeverity[]).includes(severity)
+    (group.severities as readonly ReviewSeverity[]).includes(severity),
   );
   return index === -1 ? SEVERITY_GROUPS.length : index;
 }
@@ -352,7 +359,7 @@ function formatSeverityLegend(): string {
 export function severityBadge(severity: ReviewSeverity): string {
   return (
     SEVERITY_GROUPS.find((group) =>
-      (group.severities as readonly ReviewSeverity[]).includes(severity)
+      (group.severities as readonly ReviewSeverity[]).includes(severity),
     )?.badge ?? "🟢 nit"
   );
 }
@@ -364,7 +371,7 @@ function severityIcon(severity: ReviewSeverity): string {
 export function severityLabel(severity: ReviewSeverity): string {
   return (
     SEVERITY_GROUPS.find((group) =>
-      (group.severities as readonly ReviewSeverity[]).includes(severity)
+      (group.severities as readonly ReviewSeverity[]).includes(severity),
     )?.title ?? "nit"
   );
 }
@@ -373,7 +380,7 @@ function renderIssueGroupRow(
   groupNumber: number,
   spec: IssueGroupSpec,
   firstIssueNumber: number,
-  lastIssueNumber: number
+  lastIssueNumber: number,
 ): string {
   const range =
     firstIssueNumber === lastIssueNumber
@@ -389,7 +396,7 @@ function renderIssueGroupRow(
 function renderFindingRow(
   issueNumber: number,
   finding: ReviewFinding,
-  maxPathLength: number
+  maxPathLength: number,
 ): string {
   const icon = severityIcon(finding.severity);
   return renderTableRow([
@@ -417,7 +424,7 @@ function formatFindingLocation(finding: ReviewFinding, maxPathLength: number): s
 function lineSuffix(
   line: number | undefined,
   startLine: number | undefined,
-  endLine: number | undefined
+  endLine: number | undefined,
 ): string {
   if (startLine !== undefined && endLine !== undefined && endLine !== startLine)
     return `${startLine}-${endLine}`;

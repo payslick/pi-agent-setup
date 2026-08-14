@@ -8,6 +8,7 @@ import { matchesKey, parseKey, type EditorTheme, type TUI } from "@earendil-work
 import {
   clamp,
   comparePosition,
+  deleteEditorRange,
   findPosition,
   firstNonBlank,
   isDigit,
@@ -16,8 +17,8 @@ import {
   orderedRange,
   parseCount,
   previousPosition,
-  samePosition,
   printableValue,
+  textForEditorRange,
   wordBackwardEndFrom,
   wordBackwardFrom,
   wordEndFrom,
@@ -56,6 +57,8 @@ export class VimMotionEditor extends CustomEditor {
     keybindings: KeybindingsManager,
     private readonly setFooterMode: (mode: Mode, detail?: string) => void,
     private readonly isAgentActive: () => boolean,
+    private readonly cycleConversationView: () => string,
+    private readonly openReviewFindingInHunk: (findingNumber: number) => void,
   ) {
     super(tui, theme, keybindings);
     this.setFooterMode(this.mode);
@@ -98,13 +101,11 @@ export class VimMotionEditor extends CustomEditor {
 
   private handleInsertInput(data: string): void {
     const key = parseKey(data);
-    if (key !== "up" && key !== "down") {
+    if (key !== "up" || this.isShowingAutocomplete()) {
       super.handleInput(data);
       return;
     }
-    this.editor().historyIndex = -1;
-    if (key === "up" && !this.getText()) return;
-    super.handleInput(data);
+    this.editor().moveCursor(-1, 0);
   }
 
   private editor(): EditorPrivateSurface {
@@ -157,6 +158,17 @@ export class VimMotionEditor extends CustomEditor {
   }
 
   private handleSpecialNormalKey(key: string, data: string): boolean {
+    if (this.pendingNormal?.kind === "hunk" && key === "enter") {
+      const findingNumber = Number(this.pendingNormal.findingNumber);
+      this.clearPending();
+      if (Number.isInteger(findingNumber) && findingNumber > 0) {
+        this.setStatusDetail(`opening Hunk #${findingNumber}`);
+        this.openReviewFindingInHunk(findingNumber);
+      } else {
+        this.setStatusDetail("invalid Hunk finding");
+      }
+      return true;
+    }
     if (this.pendingOperator || this.pendingNormal) return false;
 
     switch (key) {
@@ -532,6 +544,19 @@ export class VimMotionEditor extends CustomEditor {
       return;
     }
 
+    if (pending.kind === "hunk") {
+      if (isDigit(key)) {
+        this.pendingNormal = {
+          kind: "hunk",
+          findingNumber: `${pending.findingNumber}${key}`,
+        };
+        this.setStatusDetail(`Hunk #${this.pendingNormal.findingNumber} Enter`);
+      } else {
+        this.setFooterMode(this.mode);
+      }
+      return;
+    }
+
     if (pending.kind === "g") {
       if (key === "g") {
         this.moveToLine(pending.hadCount ? pending.count : 1);
@@ -566,7 +591,15 @@ export class VimMotionEditor extends CustomEditor {
 
   private handleLeaderCommand(key: string): void {
     this.clearPending();
+    if (isDigit(key)) {
+      this.pendingNormal = { kind: "hunk", findingNumber: key };
+      this.setStatusDetail(`Hunk #${key} Enter`);
+      return;
+    }
     switch (key) {
+      case "m":
+        this.setStatusDetail(`view: ${this.cycleConversationView()}`);
+        return;
       case "y":
         void copyToClipboard(this.getExpandedText()).then(
           () => this.setStatusDetail("prompt copied"),
@@ -894,56 +927,14 @@ export class VimMotionEditor extends CustomEditor {
   }
 
   private textForRange(range: TextRange): string {
-    const state = this.editor().state;
-    if (range.linewise) {
-      return `${state.lines.slice(range.start.line, range.end.line).join("\n")}\n`;
-    }
-
-    const normalized = orderedRange(range.start, range.end);
-    if (samePosition(normalized.start, normalized.end)) return "";
-    if (normalized.start.line === normalized.end.line) {
-      return (state.lines[normalized.start.line] ?? "").slice(
-        normalized.start.col,
-        normalized.end.col,
-      );
-    }
-
-    const first = (state.lines[normalized.start.line] ?? "").slice(normalized.start.col);
-    const middle = state.lines.slice(normalized.start.line + 1, normalized.end.line);
-    const last = (state.lines[normalized.end.line] ?? "").slice(0, normalized.end.col);
-    return [first, ...middle, last].join("\n");
+    return textForEditorRange(this.editor().state, range);
   }
 
   private deleteRange(range: TextRange): string {
     const text = this.textForRange(range);
     if (!text) return "";
 
-    this.mutateState((state) => {
-      if (range.linewise) {
-        state.lines.splice(range.start.line, Math.max(1, range.end.line - range.start.line));
-        if (state.lines.length === 0) state.lines = [""];
-        state.cursorLine = clamp(range.start.line, 0, state.lines.length - 1);
-        state.cursorCol = firstNonBlank(state.lines[state.cursorLine] ?? "");
-        return;
-      }
-
-      const normalized = orderedRange(range.start, range.end);
-      if (normalized.start.line === normalized.end.line) {
-        const line = state.lines[normalized.start.line] ?? "";
-        state.lines[normalized.start.line] =
-          line.slice(0, normalized.start.col) + line.slice(normalized.end.col);
-      } else {
-        const before = (state.lines[normalized.start.line] ?? "").slice(0, normalized.start.col);
-        const after = (state.lines[normalized.end.line] ?? "").slice(normalized.end.col);
-        state.lines.splice(
-          normalized.start.line,
-          normalized.end.line - normalized.start.line + 1,
-          before + after,
-        );
-      }
-      state.cursorLine = normalized.start.line;
-      state.cursorCol = normalized.start.col;
-    });
+    this.mutateState((state) => deleteEditorRange(state, range));
 
     return text;
   }

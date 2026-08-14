@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, stat } from "node:fs/promises";
+import { appendFile, mkdir, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -57,6 +57,7 @@ interface HerdrPane {
   pane_id: string;
   tab_id: string;
   workspace_id: string;
+  focused?: boolean;
 }
 
 interface HerdrAgent extends HerdrPane {
@@ -120,7 +121,11 @@ const appendSkillArgs = (args: string[], spec: SubagentSpec, projectRoot: string
   if (spec.noSkills) args.push("--no-skills");
 };
 
-export const piArgsForSpec = (spec: SubagentSpec, projectRoot: string): string[] => {
+export const piArgsForSpec = (
+  spec: SubagentSpec,
+  projectRoot: string,
+  systemPromptArgument = spec.systemPrompt?.replace(/\s+/g, " ").trim(),
+): string[] => {
   const args: string[] = [];
   if (spec.provider) args.push("--provider", spec.provider);
   if (spec.model || !spec.provider) args.push("--model", spec.model ?? DEFAULT_SUBAGENT_MODEL);
@@ -133,10 +138,10 @@ export const piArgsForSpec = (spec: SubagentSpec, projectRoot: string): string[]
   if (spec.noExtensions) args.push("--no-extensions");
   appendSkillArgs(args, spec, projectRoot);
   if (spec.noPromptTemplates) args.push("--no-prompt-templates");
-  if (spec.systemPrompt?.trim()) {
+  if (systemPromptArgument) {
     args.push(
       spec.replaceSystemPrompt ? "--system-prompt" : "--append-system-prompt",
-      spec.systemPrompt,
+      systemPromptArgument,
     );
   }
   return args;
@@ -169,6 +174,22 @@ const ensureHerdr = (): HerdrContext => {
     throw new Error("Herdr subagents require Pi to run inside a Herdr-managed pane.");
   }
   return { paneId, tabId, workspaceId };
+};
+
+export const shouldPlayMainAgentSound = (
+  environment: NodeJS.ProcessEnv,
+  focused: boolean,
+): boolean => environment.HERDR_ENV === "1" && !environment.PI_SUBAGENT_ID && !focused;
+
+const playMainAgentSound = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> => {
+  if (process.env.HERDR_ENV !== "1" || process.env.PI_SUBAGENT_ID) return;
+  const current = await runHerdr<{ pane: HerdrPane }>(
+    pi,
+    ["pane", "current", "--current"],
+    ctx.signal,
+  );
+  if (!shouldPlayMainAgentSound(process.env, current.pane.focused ?? false)) return;
+  await runHerdr(pi, ["notification", "show", "Pi completed", "--sound", "done"], ctx.signal);
 };
 
 const createTab = async (
@@ -322,6 +343,19 @@ const writeOutboxEnv = async (root: string, id: string): Promise<string> => {
   return outboxPath;
 };
 
+const writeSystemPromptFile = async (
+  root: string,
+  id: string,
+  systemPrompt: string | undefined,
+): Promise<string | undefined> => {
+  if (!systemPrompt?.trim()) return undefined;
+  const directory = path.resolve(root, OUTBOX_ROOT);
+  await mkdir(directory, { recursive: true });
+  const systemPromptPath = path.join(directory, `${id}.system-prompt.md`);
+  await writeFile(systemPromptPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
+  return systemPromptPath;
+};
+
 const cleanupFailedSpawn = async (
   pi: ExtensionAPI,
   signal: AbortSignal | undefined,
@@ -342,6 +376,7 @@ const spawnOneSubagent = async (
   const tabLabel = tabLabelForSpec(resolved);
   const cwd = resolveCwd(ctx.cwd, resolved.cwd);
   const outboxPath = await writeOutboxEnv(ctx.cwd, id);
+  const systemPromptPath = await writeSystemPromptFile(ctx.cwd, id, resolved.systemPrompt);
   const created = await createTab(pi, ctx, workspaceId, cwd, tabLabel, resolved.focus ?? false, {
     PI_SUBAGENT_ID: id,
     PI_SUBAGENT_NAME: name,
@@ -372,7 +407,7 @@ const spawnOneSubagent = async (
   };
   try {
     await startAgent(pi, ctx, name, record.paneId, [
-      ...piArgsForSpec(resolved, ctx.cwd),
+      ...piArgsForSpec(resolved, ctx.cwd, systemPromptPath),
       "--name",
       tabLabel,
       "--append-system-prompt",
@@ -464,7 +499,7 @@ const listRecords = async (pi: ExtensionAPI, signal: AbortSignal | undefined): P
 };
 
 const updateSubagentStatus = (ctx: ExtensionContext): void => {
-  if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_NAME, `agents:${registry.size}`);
+  if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_NAME, `herdr-agents:${registry.size}`);
 };
 
 const appendSubagentQuestion = async (params: AskMainAgentInput): Promise<string> => {
@@ -806,6 +841,9 @@ const registerLifecycle = (pi: ExtensionAPI): void => {
     await pruneMissingRecords(pi, ctx.signal, herdr.workspaceId).catch(() => undefined);
     updateSubagentStatus(ctx);
     startMaintenanceLoop(pi, ctx);
+  });
+  pi.on("agent_settled", async (_event, ctx) => {
+    await playMainAgentSound(pi, ctx).catch(() => undefined);
   });
   pi.on("session_shutdown", (_event, ctx) => {
     if (maintenanceTimer) clearInterval(maintenanceTimer);
