@@ -8,6 +8,11 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  POST_EDIT_VALIDATION_REQUEST_EVENT,
+  type PostEditValidationRequest,
+} from "./post-edit-validation-events";
+
 export interface CommandResult {
   command: string;
   exitCode: number | null;
@@ -65,11 +70,12 @@ const TYPECHECKABLE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
 const EXIT_CODE_UNKNOWN = "unknown";
 const MULTI_EDIT_TOOL_NAME = "multi-edit";
 const PARENT_PATH_SEGMENT = "." + ".";
+const IGNORED_PATH_PREFIXES = [".pi/tmp/upstream/"];
 const STATUS_KEY = "post-edit-checks";
 const WARNING_RE = /\b(warnings?|deprecated|deprecation)\b/i;
 const VALIDATION_PROMPT_MARKER = "Post-edit validation discipline:";
 const POST_EDIT_VALIDATION_INSTRUCTIONS = `${VALIDATION_PROMPT_MARKER}
-- Background post-edit validation runs configured format, check, typecheck, and unit-test scripts after file edits.
+- Multi-edit awaits configured format, check, typecheck, and unit-test scripts before returning; validation for other file-edit tools runs in the background.
 - Do not run manual format/check/typecheck/test commands just to validate a completed edit batch; passing and stale results stay hidden.
 - Run validation manually only when the user explicitly asks or you need a targeted diagnostic after a reported issue.
 - Validation issues are delivered privately first so you can fix them; only unresolved issues are shown after your run settles.
@@ -83,6 +89,7 @@ let editRevision = 0;
 let pendingTimer: NodeJS.Timeout | undefined;
 let activeRun: ActiveValidationRun | undefined;
 const activeEditToolCallIds = new Set<string>();
+const awaitedMultiEditToolCallIds = new Set<string>();
 const activeEditFallbackTimers = new Map<string, NodeJS.Timeout>();
 const editQuiescenceWaiters = new Set<() => void>();
 const pendingFiles = new Set<string>();
@@ -116,6 +123,11 @@ function resolveAffectedFile(root: string, filePath: string): string | null {
 
 function normalizeRelativePath(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+export function isPostEditValidationIgnored(filePath: string): boolean {
+  const normalizedPath = normalizeRelativePath(filePath);
+  return IGNORED_PATH_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix));
 }
 
 function relativeFiles(root: string, files: Iterable<string>): string[] {
@@ -236,6 +248,7 @@ function resetValidationState(): void {
   activeRun = undefined;
   editRevision = 0;
   activeEditToolCallIds.clear();
+  awaitedMultiEditToolCallIds.clear();
   for (const timeout of activeEditFallbackTimers.values()) clearTimeout(timeout);
   activeEditFallbackTimers.clear();
   resolveEditQuiescenceWaiters();
@@ -569,7 +582,13 @@ function affectedPathsFromEvent(event: ToolResultEvent): string[] {
 function checkableAffectedFiles(root: string, affectedPaths: readonly string[]): string[] {
   return affectedPaths
     .map((filePath) => resolveAffectedFile(root, filePath))
-    .filter((file): file is string => Boolean(file && isCheckableFile(file)));
+    .filter((file): file is string =>
+      Boolean(
+        file &&
+        isCheckableFile(file) &&
+        !isPostEditValidationIgnored(normalizeRelativePath(path.relative(root, file))),
+      ),
+    );
 }
 
 function queueAffectedPaths(
@@ -586,6 +605,21 @@ function queueAffectedPaths(
   setValidationStatus(ctx, undefined);
   for (const file of files) pendingFiles.add(file);
   schedulePendingBatch(pi, ctx);
+}
+
+async function runAwaitedMultiEditValidation(
+  pi: ExtensionAPI,
+  request: PostEditValidationRequest,
+): Promise<void> {
+  awaitedMultiEditToolCallIds.add(request.toolCallId);
+  releaseEditToolCall(pi, request.ctx, request.toolCallId);
+  if (checkableAffectedFiles(request.ctx.cwd, request.affectedPaths).length === 0) return;
+
+  queueAffectedPaths(pi, request.ctx, request.affectedPaths);
+  clearPendingTimer();
+  await waitForEditQuiescence();
+  clearPendingTimer();
+  await launchPendingBatch(pi, request.ctx);
 }
 
 export default function postEditChecks(pi: ExtensionAPI) {
@@ -606,6 +640,11 @@ export default function postEditChecks(pi: ExtensionAPI) {
 
   pi.on("agent_settled", () => reportDeferredIssues(pi));
 
+  pi.events.on(POST_EDIT_VALIDATION_REQUEST_EVENT, (data) => {
+    const request = data as PostEditValidationRequest;
+    request.waitFor(runAwaitedMultiEditValidation(pi, request));
+  });
+
   pi.on("tool_call", (event, ctx) => {
     if (!isFileMutationToolName(event.toolName)) return;
     clearPendingTimer();
@@ -613,6 +652,12 @@ export default function postEditChecks(pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", (event, ctx) => {
+    if (
+      event.toolName === MULTI_EDIT_TOOL_NAME &&
+      awaitedMultiEditToolCallIds.delete(event.toolCallId)
+    ) {
+      return undefined;
+    }
     const isMutationTool = isFileMutationToolName(event.toolName);
     const affectedPaths = affectedPathsFromEvent(event);
     if (affectedPaths.length > 0) queueAffectedPaths(pi, ctx, affectedPaths);
