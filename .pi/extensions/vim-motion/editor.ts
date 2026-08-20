@@ -59,6 +59,7 @@ export class VimMotionEditor extends CustomEditor {
     private readonly isAgentActive: () => boolean,
     private readonly cycleConversationView: () => string,
     private readonly openReviewFindingInHunk: (findingNumber: number) => void,
+    private readonly handlePrefixInput: (data: string) => boolean,
   ) {
     super(tui, theme, keybindings);
     this.setFooterMode(this.mode);
@@ -72,6 +73,8 @@ export class VimMotionEditor extends CustomEditor {
   }
 
   override handleInput(data: string): void {
+    if (this.handlePrefixInput(data)) return;
+
     if (matchesKey(data, "escape")) {
       this.handleEscape(data);
       return;

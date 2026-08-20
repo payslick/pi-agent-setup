@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+
+import { PREFIX_STATUS_KEY } from "./prefix-mode/registry";
+import { SESSION_SEARCH_STATUS_KEY } from "./prefix-mode/session-search";
 
 const SUMMARY_KEY = "context-summary-footer";
 const CODEX_STATUS_KEY = "codex-usage";
@@ -60,6 +68,18 @@ function oneLine(text: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+export const resolveFooterTopLine = (summary: string, searchStatus: string | undefined): string =>
+  oneLine(searchStatus ?? "") || summary;
+
+export const resolvePrefixFooterLines = (
+  statusEntries: ReadonlyArray<readonly [string, string]>,
+): string[] | undefined => {
+  const text = statusEntries.find(([key]) => key === PREFIX_STATUS_KEY)?.[1];
+  if (!text) return undefined;
+  const lines = text.split(/\r?\n/).map(oneLine).filter(Boolean);
+  return lines.length ? lines : undefined;
+};
 
 function trimSentence(text: string): string {
   const line = oneLine(text).replace(/^(["'`]+)|(["'`]+)$/g, "");
@@ -259,6 +279,49 @@ function formatCwd(cwd: string): string {
   return cwd.startsWith("~/payslick/") ? cwd.slice("~/payslick/".length) : cwd;
 }
 
+const secondaryFooterStatuses = (
+  statusEntries: Array<[string, string]>,
+  vimStatus: string,
+): string[] =>
+  [
+    vimStatus || undefined,
+    ...statusEntries
+      .filter(
+        ([key]) =>
+          key !== CODEX_STATUS_KEY &&
+          key !== VIM_STATUS_KEY &&
+          key !== BRANCH_PR_STATUS_KEY &&
+          key !== SESSION_SEARCH_STATUS_KEY,
+      )
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, text]) => oneLine(text)),
+  ].filter((status): status is string => Boolean(status));
+
+const footerUsage = (ctx: ExtensionContext): { input: number; output: number; cost: number } => {
+  let input = 0;
+  let output = 0;
+  let cost = 0;
+  for (const entry of ctx.sessionManager.getEntries()) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    input += entry.message.usage.input;
+    output += entry.message.usage.output;
+    cost += entry.message.usage.cost.total;
+  }
+  return { input, output, cost };
+};
+
+const renderPrefixFooter = (
+  statusEntries: Array<[string, string]>,
+  theme: Theme,
+  width: number,
+): string[] | undefined => {
+  const lines = resolvePrefixFooterLines(statusEntries);
+  if (!lines) return undefined;
+  return lines.flatMap((line, index) =>
+    wrapTextWithAnsi(index === 0 ? theme.fg("accent", line) : line, width),
+  );
+};
+
 function installFooter(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
   ctx.ui.setFooter((tui, theme, footerData) => {
@@ -271,21 +334,15 @@ function installFooter(ctx: ExtensionContext): void {
       },
       invalidate() {},
       render(width: number): string[] {
-        let input = 0;
-        let output = 0;
-        let cost = 0;
-        for (const entry of ctx.sessionManager.getEntries()) {
-          if (entry.type === "message" && entry.message.role === "assistant") {
-            input += entry.message.usage.input;
-            output += entry.message.usage.output;
-            cost += entry.message.usage.cost.total;
-          }
-        }
-
+        const { input, output, cost } = footerUsage(ctx);
         const statusEntries = Array.from(footerData.getExtensionStatuses().entries()).filter(
           ([key]) => key !== SUMMARY_KEY,
         );
+        const prefixFooter = renderPrefixFooter(statusEntries, theme, width);
+        if (prefixFooter) return prefixFooter;
+
         const prStatus = statusEntries.find(([key]) => key === BRANCH_PR_STATUS_KEY)?.[1];
+        const searchStatus = statusEntries.find(([key]) => key === SESSION_SEARCH_STATUS_KEY)?.[1];
         let cwd = formatCwd(ctx.sessionManager.getCwd());
         const branch = footerData.getGitBranch();
         if (branch) cwd = `${cwd} (${branch})`;
@@ -330,7 +387,11 @@ function installFooter(ctx: ExtensionContext): void {
         );
 
         const lines = [
-          truncateToWidth(theme.fg("accent", summaryText), width, theme.fg("dim", "...")),
+          truncateToWidth(
+            theme.fg("accent", resolveFooterTopLine(summaryText, searchStatus)),
+            width,
+            theme.fg("dim", "..."),
+          ),
           alignSides(
             theme.fg("dim", cwd),
             theme.fg("dim", sessionId),
@@ -340,16 +401,7 @@ function installFooter(ctx: ExtensionContext): void {
           statsLine,
         ];
 
-        const statuses = [
-          vimStatus || undefined,
-          ...statusEntries
-            .filter(
-              ([key]) =>
-                key !== CODEX_STATUS_KEY && key !== VIM_STATUS_KEY && key !== BRANCH_PR_STATUS_KEY,
-            )
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([, text]) => oneLine(text)),
-        ].filter(Boolean);
+        const statuses = secondaryFooterStatuses(statusEntries, vimStatus);
         if (statuses.length)
           lines.push(truncateToWidth(statuses.join(" "), width, theme.fg("dim", "...")));
         return lines;

@@ -1,6 +1,7 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { CONVERSATION_VIEW_CYCLE_EVENT, type ConversationView } from "../conversation-view";
+import { PREFIX_MODE_INPUT_EVENT, type PrefixModeInputRequest } from "../prefix-mode/events";
 import { PR_REVIEW_OPEN_HUNK_EVENT, type OpenPrReviewHunkRequest } from "../pr-review/hunk-events";
 import { VimMotionEditor } from "./editor";
 import type { Mode } from "./helpers";
@@ -43,6 +44,16 @@ export default function vimMotion(pi: ExtensionAPI): void {
           reportStatus: (status: string) => setFooterMode("normal", status),
         } satisfies OpenPrReviewHunkRequest);
       };
+      const handlePrefixInput = (data: string): boolean => {
+        let consumed = false;
+        pi.events.emit(PREFIX_MODE_INPUT_EVENT, {
+          data,
+          consume: () => {
+            consumed = true;
+          },
+        } satisfies PrefixModeInputRequest);
+        return consumed;
+      };
       const editor = new VimMotionEditor(
         tui,
         theme,
@@ -51,6 +62,7 @@ export default function vimMotion(pi: ExtensionAPI): void {
         () => active,
         cycleConversationView,
         openReviewFindingInHunk,
+        handlePrefixInput,
       );
       editors.add(editor);
       return editor;

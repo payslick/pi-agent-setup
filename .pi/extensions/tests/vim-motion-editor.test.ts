@@ -9,6 +9,7 @@ const UP = "\x1b[A";
 function createEditor(
   cycleConversationView = () => "both",
   openReviewFindingInHunk = (_findingNumber: number) => {},
+  handlePrefixInput = (_data: string) => false,
 ): VimMotionEditor {
   const tui = { requestRender() {} } as unknown as TUI;
   const theme = { borderColor: (value: string) => value } as unknown as EditorTheme;
@@ -21,10 +22,40 @@ function createEditor(
     () => false,
     cycleConversationView,
     openReviewFindingInHunk,
+    handlePrefixInput,
   );
 }
 
 describe("VimMotionEditor", () => {
+  test("delegates complete prefix sequences before insert or normal mode handles them", () => {
+    let prefixActive = false;
+    const prefixInputs: string[] = [];
+    const editor = createEditor(
+      () => "both",
+      () => {},
+      (data) => {
+        prefixInputs.push(data);
+        if (data === "\x13") {
+          prefixActive = true;
+          return true;
+        }
+        if (!prefixActive) return false;
+        if (data === "k") prefixActive = false;
+        return true;
+      },
+    );
+
+    editor.handleInput("\x13");
+    editor.handleInput("5");
+    editor.handleInput("k");
+    editor.handleInput("\x1b");
+    editor.handleInput("\x13");
+    editor.handleInput("k");
+
+    expect(prefixInputs).toEqual(["\x13", "5", "k", "\x1b", "\x13", "k"]);
+    expect(editor.getText()).toBe("");
+  });
+
   test("cycles the conversation view with Space m in normal mode", () => {
     let cycles = 0;
     const editor = createEditor(() => {
