@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { AutocompleteProvider, EditorTheme, TUI } from "@earendil-works/pi-tui";
 
 import { VimMotionEditor } from "../vim-motion/editor";
 
@@ -54,6 +54,28 @@ describe("VimMotionEditor", () => {
 
     expect(prefixInputs).toEqual(["\x13", "5", "k", "\x1b", "\x13", "k"]);
     expect(editor.getText()).toBe("");
+  });
+
+  test("enters insert mode with a slash and triggers slash-command suggestions", async () => {
+    const autocompleteQueries: string[] = [];
+    const editor = createEditor();
+    editor.setAutocompleteProvider({
+      async getSuggestions(lines, cursorLine, cursorCol) {
+        autocompleteQueries.push((lines[cursorLine] ?? "").slice(0, cursorCol));
+        return null;
+      },
+      applyCompletion(lines, cursorLine, cursorCol) {
+        return { lines, cursorLine, cursorCol };
+      },
+    } satisfies AutocompleteProvider);
+
+    editor.handleInput("\x1b");
+    editor.handleInput("/");
+    editor.handleInput("r");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(editor.getText()).toBe("/r");
+    expect(autocompleteQueries).toContain("/r");
   });
 
   test("cycles the conversation view with Space m in normal mode", () => {

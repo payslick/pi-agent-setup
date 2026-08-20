@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+  getMarkdownTheme,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type MessageRenderer,
+} from "@earendil-works/pi-coding-agent";
+import { Markdown, Text } from "@earendil-works/pi-tui";
 import {
   contractFilesForSpec,
   validateImplementationAssignments,
@@ -29,6 +34,7 @@ import {
   formatQuestionForMainAgent,
   formatSubagentCompletionSummary,
   restoreRecordsForWorkspace,
+  sessionNameForSpec,
   shortenHomePath,
   tabLabelForSpec,
   type SpawnedSubagentRecord,
@@ -251,18 +257,23 @@ const startAgent = async (
   return result.agent;
 };
 
+export const agentPromptArgs = (target: string, prompt: string): string[] => [
+  "agent",
+  "prompt",
+  target,
+  prompt,
+];
+
 const promptAgent = async (
   pi: ExtensionAPI,
   signal: AbortSignal | undefined,
   target: string,
   prompt: string,
+  waitForWorking: boolean,
 ): Promise<void> => {
-  await runHerdr(
-    pi,
-    ["agent", "prompt", target, prompt, "--wait", "--until", "working", "--timeout", "5000"],
-    signal,
-    7000,
-  );
+  const args = agentPromptArgs(target, prompt);
+  if (waitForWorking) args.push("--wait", "--until", "working", "--timeout", "5000");
+  await runHerdr(pi, args, signal, 7000);
 };
 
 const readAgent = async (
@@ -364,16 +375,28 @@ const cleanupFailedSpawn = async (
   await closeTab(pi, signal, tabId).catch(() => undefined);
 };
 
+const spawningAgentDefaults = (
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): Pick<SubagentSpec, "model" | "thinking"> => ({
+  model:
+    process.env.PI_SUBAGENT_DEFAULT_MODEL?.trim() ||
+    (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : DEFAULT_SUBAGENT_MODEL),
+  thinking: pi.getThinkingLevel(),
+});
+
 const spawnOneSubagent = async (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   workspaceId: string,
   spec: SubagentSpec,
 ): Promise<SpawnedSubagentRecord> => {
-  const resolved = resolveSubagentSpec(spec);
+  const parentSessionId = ctx.sessionManager.getSessionId();
+  const resolved = resolveSubagentSpec(spec, spawningAgentDefaults(pi, ctx), parentSessionId);
   const id = randomUUID();
   const name = agentNameForSpec(resolved, id);
   const tabLabel = tabLabelForSpec(resolved);
+  const sessionName = sessionNameForSpec(resolved, parentSessionId);
   const cwd = resolveCwd(ctx.cwd, resolved.cwd);
   const outboxPath = await writeOutboxEnv(ctx.cwd, id);
   const systemPromptPath = await writeSystemPromptFile(ctx.cwd, id, resolved.systemPrompt);
@@ -409,11 +432,11 @@ const spawnOneSubagent = async (
     await startAgent(pi, ctx, name, record.paneId, [
       ...piArgsForSpec(resolved, ctx.cwd, systemPromptPath),
       "--name",
-      tabLabel,
+      sessionName,
       "--append-system-prompt",
       `You are Herdr subagent ${name}. Use ask_main_agent when blocked.`,
     ]);
-    if (resolved.prompt?.trim()) await promptAgent(pi, ctx.signal, name, resolved.prompt);
+    if (resolved.prompt?.trim()) await promptAgent(pi, ctx.signal, name, resolved.prompt, true);
     registry.set(record.id, record);
     pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
     return record;
@@ -714,6 +737,11 @@ const startMaintenanceLoop = (pi: ExtensionAPI, ctx: ExtensionContext): void => 
   maintenanceTimer = setInterval(() => void tick(), HERDR_POLL_INTERVAL_MS);
 };
 
+export const missingSubagentActionResult = (input: ManageSubagentsInput): string => {
+  if (input.action === "abort" || input.action === "close") return "";
+  throw new Error(`Unknown subagent: ${input.id ?? "(missing id)"}.`);
+};
+
 const handleManageAction = async (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -726,7 +754,7 @@ const handleManageAction = async (
     return removed ? `Pruned ${removed} stale subagent record(s).\n\n${records}` : records;
   }
   const record = findRecord(input.id);
-  if (!record) throw new Error(`Unknown subagent: ${input.id ?? "(missing id)"}.`);
+  if (!record) return missingSubagentActionResult(input);
   if (input.action === "read")
     return readAgent(pi, ctx.signal, record.paneId, clampReadLines(input.lines));
   if (input.action === "prompt") {
@@ -743,7 +771,7 @@ const handleManageAction = async (
     record.waitingForAnswer = false;
     pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
     try {
-      await promptAgent(pi, ctx.signal, record.paneId, input.message);
+      await promptAgent(pi, ctx.signal, record.paneId, input.message, false);
       awaitingWorking.delete(record.id);
       return `Prompted ${record.name}.`;
     } catch (error) {
@@ -814,11 +842,25 @@ const parseManageCommand = (args: string): ManageSubagentsInput => {
   };
 };
 
+const completionMessageText = (content: Parameters<MessageRenderer>[0]["content"]): string =>
+  typeof content === "string"
+    ? content
+    : content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+
+const completionPreview = (markdown: string): string =>
+  markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^(?:✅|❌|⏹️|❔)\s/u.test(line)) ?? "Agent returned.";
+
+export const renderSubagentCompletionMessage: MessageRenderer = (message, { expanded }, theme) => {
+  const markdown = completionMessageText(message.content);
+  if (expanded) return new Markdown(markdown, 1, 0, getMarkdownTheme());
+  return new Text(`${completionPreview(markdown)} ${theme.fg("dim", "(Ctrl+O to expand)")}`, 1, 0);
+};
+
 const registerLifecycle = (pi: ExtensionAPI): void => {
-  pi.registerMessageRenderer(
-    COMPLETION_MESSAGE_TYPE,
-    (message) => new Text(String(message.content ?? ""), 0, 0),
-  );
+  pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, renderSubagentCompletionMessage);
   pi.on("session_start", async (_event, ctx) => {
     const herdr = ensureHerdr();
     registry = restoreRecordsForWorkspace(
@@ -929,9 +971,11 @@ const registerCommands = (pi: ExtensionAPI): void => {
         const input = parseManageCommand(args);
         const text = await handleManageAction(pi, ctx, input);
         updateSubagentStatus(ctx);
-        if (input.action === "list" || input.action === "read")
+        if (input.action === "list" || input.action === "read") {
           await ctx.ui.editor(`Subagents ${input.action}`, text);
-        else ctx.ui.notify(text, "info");
+          return;
+        }
+        if (text) ctx.ui.notify(text, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

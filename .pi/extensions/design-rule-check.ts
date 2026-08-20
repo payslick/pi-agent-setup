@@ -10,6 +10,7 @@ const EXTENSION_ERROR_PREFIX = "Design-rule check extension failed";
 const MULTI_EDIT_TOOL_NAME = "multi-edit";
 const MODEL_TIMEOUT_MS = Number(process.env.PI_DESIGN_RULE_MODEL_TIMEOUT_MS ?? 60_000);
 const DELAY_BEFORE_MODEL_MS = 2_000;
+const IGNORED_PATH_PREFIXES = [".pi/tmp/upstream/"];
 
 const DESIGN_RULE_MODEL = process.env.PI_DESIGN_RULE_MODEL;
 const DESIGN_RULE_SYSTEM_PROMPT = [
@@ -32,6 +33,11 @@ function resolveAffectedFile(root: string, filePath: string): string | null {
   const insideRoot =
     relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
   return insideRoot ? absolutePath : null;
+}
+
+function isIgnoredPath(root: string, filePath: string): boolean {
+  const relativePath = path.relative(root, filePath).split(path.sep).join("/");
+  return IGNORED_PATH_PREFIXES.some((prefix) => relativePath.startsWith(prefix));
 }
 
 function changedFilesFromMultiEdit(event: ToolResultEvent): string[] {
@@ -109,11 +115,12 @@ function collectJsonCandidates(text: string): string[] {
     if (text[i] === "{") {
       if (depth === 0) start = i;
       depth++;
-    } else if (text[i] === "}" && depth > 0) {
-      depth--;
-      if (depth === 0 && start !== -1 && text.slice(start, i + 1).includes('"violations"')) {
-        candidates.push(text.slice(start, i + 1).trim());
-      }
+      continue;
+    }
+    if (text[i] !== "}" || depth === 0) continue;
+    depth--;
+    if (depth === 0 && start !== -1 && text.slice(start, i + 1).includes('"violations"')) {
+      candidates.push(text.slice(start, i + 1).trim());
     }
   }
 
@@ -273,7 +280,7 @@ export default function designRuleCheckExtension(pi: ExtensionAPI): void {
 
     for (const filePath of affectedPaths) {
       const affectedFile = resolveAffectedFile(ctx.cwd, filePath);
-      if (affectedFile === null) continue;
+      if (affectedFile === null || isIgnoredPath(ctx.cwd, affectedFile)) continue;
 
       const ext = path.extname(affectedFile);
       if (ext !== ".ts" && ext !== ".tsx" && ext !== ".js" && ext !== ".jsx") continue;

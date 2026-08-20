@@ -9,13 +9,10 @@ import {
 } from "./findings.js";
 import { buildLaneReviewPrompt } from "./lanes.js";
 
-const REVIEW_AGENT_TIMEOUT_MS = Number(process.env.PI_REVIEW_AGENT_TIMEOUT_MS ?? 300_000);
-const REVIEW_AGENT_REPAIR_TIMEOUT_MS = Number(
-  process.env.PI_REVIEW_AGENT_REPAIR_TIMEOUT_MS ?? 60_000,
-);
 const REVIEW_AGENT_DISABLE_REPAIR = process.env.PI_REVIEW_DISABLE_REPAIR === "1";
 const REVIEW_AGENT_ENABLE_TOOLS = process.env.PI_REVIEW_AGENT_ENABLE_TOOLS === "1";
 const REVIEW_AGENT_MODEL = process.env.PI_REVIEW_AGENT_MODEL;
+const REVIEW_AGENT_THINKING = process.env.PI_REVIEW_AGENT_THINKING;
 const REVIEW_AGENT_ALLOWED_TOOLS = [
   "read",
   "read-many-files-lines",
@@ -58,16 +55,19 @@ const REVIEW_AGENT_SYSTEM_PROMPT = REVIEW_AGENT_ENABLE_TOOLS
   ? REVIEW_AGENT_SYSTEM_PROMPT_WITH_TOOLS
   : REVIEW_AGENT_SYSTEM_PROMPT_NO_TOOLS;
 
-function selectedReviewAgentModel(ctx) {
-  return REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+export function selectedReviewAgentDefaults(pi, ctx) {
+  return {
+    model: REVIEW_AGENT_MODEL || (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined),
+    thinking: REVIEW_AGENT_THINKING || pi.getThinkingLevel(),
+  };
 }
 
-function buildReviewAgentArguments(ctx, input) {
+export function buildReviewAgentArguments(ctx, input) {
   const shellSafeSystemPrompt = input.systemPrompt.replace(/\s+/g, " ").trim();
   return [
     ...(input.model ? ["--model", input.model] : []),
     "--thinking",
-    "off",
+    input.thinking,
     ...(input.toolsEnabled
       ? [
           "--tools",
@@ -106,7 +106,7 @@ export async function runCiAnalysisLaneAgent(pi, ctx, prMetadata, ciStatus, shar
   const agentArguments = buildReviewAgentArguments(ctx, {
     laneId,
     prompt,
-    model: selectedReviewAgentModel(ctx),
+    ...selectedReviewAgentDefaults(pi, ctx),
     toolsEnabled: REVIEW_AGENT_ENABLE_TOOLS,
     allowedTools: REVIEW_AGENT_ALLOWED_TOOLS,
     systemPrompt: REVIEW_AGENT_SYSTEM_PROMPT,
@@ -116,7 +116,6 @@ export async function runCiAnalysisLaneAgent(pi, ctx, prMetadata, ciStatus, shar
       label: `PR-${laneId}`,
       prompt,
       piArgs: agentArguments,
-      timeout: REVIEW_AGENT_TIMEOUT_MS,
     });
     await artifacts.write("stdout.txt", result.stdout);
     await artifacts.write("stderr.txt", result.stderr);
@@ -156,7 +155,7 @@ function laneAgentErrorResult(laneId, error, artifacts, rawOutput) {
   };
 }
 
-async function prepareLaneAgentRun(ctx, prMetadata, packet, sharedArtifacts) {
+async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts) {
   const prompt = buildLaneReviewPrompt(prMetadata, packet, {
     sharedDir: sharedArtifacts.sharedDir,
     laneDir: getLaneDir(ctx, packet.laneId),
@@ -200,7 +199,7 @@ async function prepareLaneAgentRun(ctx, prMetadata, packet, sharedArtifacts) {
   const agentArguments = buildReviewAgentArguments(ctx, {
     laneId: packet.laneId,
     prompt,
-    model: selectedReviewAgentModel(ctx),
+    ...selectedReviewAgentDefaults(pi, ctx),
     toolsEnabled,
     allowedTools,
     systemPrompt: toolsEnabled
@@ -253,6 +252,7 @@ async function processLaneAgentOutput(pi, ctx, packet, result, artifacts, onProg
 export async function runLaneAgent(pi, ctx, prMetadata, packet, sharedArtifacts, onProgress) {
   onProgress?.("running");
   const { prompt, artifacts, agentArguments } = await prepareLaneAgentRun(
+    pi,
     ctx,
     prMetadata,
     packet,
@@ -263,7 +263,6 @@ export async function runLaneAgent(pi, ctx, prMetadata, packet, sharedArtifacts,
       label: `PR-${packet.laneId}`,
       prompt,
       piArgs: agentArguments,
-      timeout: REVIEW_AGENT_TIMEOUT_MS,
     });
     await artifacts.write("stdout.txt", result.stdout);
     await artifacts.write("stderr.txt", result.stderr);
@@ -293,7 +292,7 @@ async function repairAgentFindings(pi, ctx, packet, stdout, writeArtifact) {
   const agentArguments = [
     ...buildReviewAgentArguments(ctx, {
       laneId: packet.laneId,
-      model: selectedReviewAgentModel(ctx),
+      ...selectedReviewAgentDefaults(pi, ctx),
       toolsEnabled: false,
       allowedTools: "",
       systemPrompt: REVIEW_AGENT_SYSTEM_PROMPT,
@@ -305,7 +304,6 @@ async function repairAgentFindings(pi, ctx, packet, stdout, writeArtifact) {
       label: `PR-${packet.laneId}-repair`,
       prompt,
       piArgs: agentArguments,
-      timeout: REVIEW_AGENT_REPAIR_TIMEOUT_MS,
     });
     await writeArtifact?.("repair-stdout.txt", result.stdout);
     await writeArtifact?.("repair-stderr.txt", result.stderr);

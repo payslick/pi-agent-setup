@@ -14,9 +14,12 @@ export const SUBAGENT_PROFILE_NAMES = [
   "test-reviewer",
 ] as const;
 
-const thinkingSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
-  description: "Thinking level for the subagent.",
-});
+const thinkingSchema = StringEnum(
+  ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,
+  {
+    description: "Thinking level for the subagent. Defaults to the spawning agent's level.",
+  },
+);
 
 const workPacketSchema = Type.Object({
   objective: Type.String({ description: "Bounded implementation or review objective." }),
@@ -39,7 +42,7 @@ const subagentSpecSchema = Type.Object({
   name: Type.Optional(Type.String({ description: "Optional human-readable subagent name." })),
   profile: Type.Optional(
     StringEnum(SUBAGENT_PROFILE_NAMES, {
-      description: "Reusable domain role with model, tools, skills, and system instructions.",
+      description: "Reusable domain role with tools, skills, and system instructions.",
     }),
   ),
   prompt: Type.Optional(
@@ -63,7 +66,7 @@ const subagentSpecSchema = Type.Object({
   ),
   model: Type.Optional(
     Type.String({
-      description: `Provider-qualified model for --model. Defaults to ${DEFAULT_SUBAGENT_MODEL}.`,
+      description: "Provider-qualified model for --model. Defaults to the spawning agent's model.",
     }),
   ),
   provider: Type.Optional(Type.String({ description: "Provider name for --provider, if needed." })),

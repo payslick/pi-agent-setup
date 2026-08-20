@@ -1,25 +1,37 @@
+import { stripVTControlCharacters } from "node:util";
 import {
   AssistantMessageComponent,
   createReadToolDefinition,
   type ExtensionAPI,
+  type ExtensionContext,
   type ReadToolInput,
   Theme,
   type ThemeColor,
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { CONVERSATION_VIEW_CYCLE_EVENT, type ConversationView } from "./conversation-view";
 
-const PROMPT_SEPARATOR = "=========";
 const WHITE = "\x1b[97m";
+const GRAY = "\x1b[90m";
+const DIM = "\x1b[2m";
 const RESET_FOREGROUND = "\x1b[39m";
+const RESET_BACKGROUND = "\x1b[49m";
+const RESET_INTENSITY = "\x1b[22m";
+const TOOL_SUCCESS_BACKGROUND = "\x1b[48;2;18;58;41m";
+const TOOL_ERROR_BACKGROUND = "\x1b[48;2;69;25;29m";
+const MESSAGE_METADATA_WIDTH = 6;
+const LONG_MESSAGE_LINE_COUNT = 10;
 const MARKDOWN_RESPONSE_INSTRUCTION =
   "Write every assistant response in Markdown. Use headings, lists, tables, blockquotes, and fenced code blocks when they improve clarity. Keep H1 headings unchanged. Render H2 through H6 with `##` so Pi does not display literal heading hashes, and prefix the heading text with one `>` for each level below H1: `## > H2`, `## > > H3`, through `## > > > > > H6`. Do not wrap the entire response in a code fence.";
 
 const CONVERSATION_VIEWS: ConversationView[] = ["both", "messages", "responses"];
 type ConversationItem = Exclude<ConversationView, "both">;
+type ConversationMessageComponent = UserMessageComponent | AssistantMessageComponent;
+type MessageMetadata = { timestamp: number; messageNumber?: number };
+type MessageMetadataResolver = (component: ConversationMessageComponent) => MessageMetadata;
 
 let conversationView: ConversationView = "both";
 
@@ -46,26 +58,149 @@ export function formatReadInput({ path, offset, limit }: ReadToolInput): string 
   return `${path}:${startLine}-${endLine}`;
 }
 
-export function installConversationPresentation(): () => void {
+export function formatMessageTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+const hasVisibleText = (line: string): boolean => stripVTControlCharacters(line).trim().length > 0;
+
+const rightAlignMessageMetadata = (
+  line: string,
+  width: number,
+  value: string,
+  styledValue = `${DIM}${value}${RESET_INTENSITY}`,
+): string => {
+  if (width <= value.length) return truncateToWidth(styledValue, width, "");
+  const metadataWidth = Math.max(MESSAGE_METADATA_WIDTH, value.length + 1);
+  const fitted = truncateToWidth(line, width - metadataWidth, "");
+  const padding = " ".repeat(Math.max(1, width - visibleWidth(fitted) - value.length));
+  return `${fitted}${padding}${styledValue}`;
+};
+
+const styledMessageNumber = (messageNumber: number): string =>
+  `${GRAY}#${WHITE}${messageNumber}${RESET_FOREGROUND}`;
+
+export function annotateMessageLines(
+  lines: string[],
+  width: number,
+  { timestamp, messageNumber }: MessageMetadata,
+): string[] {
+  if (!lines.length) return lines;
+  const firstVisibleIndex = lines.findIndex(hasVisibleText);
+  const timeIndex = firstVisibleIndex < 0 ? 0 : firstVisibleIndex;
+  const lastVisibleIndex = lines.findLastIndex(hasVisibleText);
+  const messageLineCount = Math.max(1, lastVisibleIndex - timeIndex + 1);
+  lines[timeIndex] = rightAlignMessageMetadata(
+    lines[timeIndex] ?? "",
+    width,
+    formatMessageTimestamp(timestamp),
+  );
+  if (messageNumber === undefined) return lines;
+
+  const marker = `#${messageNumber}`;
+  const markerIndex = timeIndex + 1;
+  const styledMarker = styledMessageNumber(messageNumber);
+  while (lines.length <= markerIndex) lines.push("");
+  lines[markerIndex] = rightAlignMessageMetadata(
+    lines[markerIndex] ?? "",
+    width,
+    marker,
+    styledMarker,
+  );
+  if (messageLineCount > LONG_MESSAGE_LINE_COUNT && lastVisibleIndex !== markerIndex) {
+    lines[lastVisibleIndex] = rightAlignMessageMetadata(
+      lines[lastVisibleIndex] ?? "",
+      width,
+      marker,
+      styledMarker,
+    );
+  }
+  return lines;
+}
+
+export const createMessageMetadataResolver = (ctx: ExtensionContext): MessageMetadataResolver => {
+  const metadataByComponent = new WeakMap<
+    ConversationMessageComponent,
+    MessageMetadata & { resolved: boolean; roleIndex: number }
+  >();
+  const roleIndexes = { user: 0, assistant: 0 };
+  return (component) => {
+    const role = component instanceof UserMessageComponent ? "user" : "assistant";
+    const knownMetadata = metadataByComponent.get(component);
+    if (knownMetadata?.resolved) return { timestamp: knownMetadata.timestamp };
+    const metadata = knownMetadata ?? {
+      resolved: false,
+      roleIndex: roleIndexes[role],
+      timestamp: Date.now(),
+    };
+    if (!knownMetadata) {
+      roleIndexes[role] += 1;
+      metadataByComponent.set(component, metadata);
+    }
+    const entry = ctx.sessionManager
+      .buildContextEntries()
+      .filter((candidate) => candidate.type === "message" && candidate.message.role === role)[
+      metadata.roleIndex
+    ];
+    if (entry?.type === "message") {
+      const messageTimestamp = (entry.message as { timestamp?: number }).timestamp;
+      metadata.timestamp =
+        typeof messageTimestamp === "number"
+          ? messageTimestamp
+          : Date.parse(entry.timestamp) || metadata.timestamp;
+      metadata.resolved = true;
+    }
+    return { timestamp: metadata.timestamp };
+  };
+};
+
+export function installConversationPresentation(
+  resolveMetadata: MessageMetadataResolver = () => ({ timestamp: Date.now() }),
+): () => void {
   const originalForeground = Theme.prototype.fg;
+  const originalBackground = Theme.prototype.bg;
   const originalUserRender = UserMessageComponent.prototype.render;
   const originalAssistantRender = AssistantMessageComponent.prototype.render;
   const originalToolRender = ToolExecutionComponent.prototype.render;
+  const messageNumbers = new WeakMap<ConversationMessageComponent, number>();
+  let nextMessageNumber = 1;
   let userPromptRenderDepth = 0;
+
+  const metadataFor = (
+    component: ConversationMessageComponent,
+    lines: string[],
+  ): MessageMetadata => {
+    const metadata = resolveMetadata(component);
+    if (!lines.length) return metadata;
+    const knownNumber = messageNumbers.get(component);
+    if (knownNumber !== undefined) return { ...metadata, messageNumber: knownNumber };
+    const messageNumber = nextMessageNumber;
+    nextMessageNumber += 1;
+    messageNumbers.set(component, messageNumber);
+    return { ...metadata, messageNumber };
+  };
 
   const highlightedForeground = function (this: Theme, color: ThemeColor, text: string): string {
     if (userPromptRenderDepth > 0) return white(text);
     return originalForeground.call(this, color, text);
   };
+  const toolResultBackground = function (
+    this: Theme,
+    color: Parameters<Theme["bg"]>[0],
+    text: string,
+  ): string {
+    if (color === "toolSuccessBg") return `${TOOL_SUCCESS_BACKGROUND}${text}${RESET_BACKGROUND}`;
+    if (color === "toolErrorBg") return `${TOOL_ERROR_BACKGROUND}${text}${RESET_BACKGROUND}`;
+    return originalBackground.call(this, color, text);
+  };
   const filteredUserRender = function (this: UserMessageComponent, width: number): string[] {
-    if (!isConversationItemVisible("messages")) return [];
     userPromptRenderDepth += 1;
     try {
-      return [
-        white(PROMPT_SEPARATOR),
-        ...originalUserRender.call(this, width),
-        white(PROMPT_SEPARATOR),
-      ];
+      const lines = originalUserRender.call(this, Math.max(1, width - MESSAGE_METADATA_WIDTH));
+      const metadata = metadataFor(this, lines);
+      if (!isConversationItemVisible("messages")) return [];
+      return annotateMessageLines(lines, width, metadata);
     } finally {
       userPromptRenderDepth -= 1;
     }
@@ -74,8 +209,10 @@ export function installConversationPresentation(): () => void {
     this: AssistantMessageComponent,
     width: number,
   ): string[] {
+    const lines = originalAssistantRender.call(this, Math.max(1, width - MESSAGE_METADATA_WIDTH));
+    const metadata = metadataFor(this, lines);
     if (!isConversationItemVisible("responses")) return [];
-    return originalAssistantRender.call(this, width);
+    return annotateMessageLines(lines, width, metadata);
   };
   const filteredToolRender = function (this: ToolExecutionComponent, width: number): string[] {
     if (!isConversationItemVisible("responses")) return [];
@@ -83,12 +220,14 @@ export function installConversationPresentation(): () => void {
   };
 
   Theme.prototype.fg = highlightedForeground;
+  Theme.prototype.bg = toolResultBackground;
   UserMessageComponent.prototype.render = filteredUserRender;
   AssistantMessageComponent.prototype.render = filteredAssistantRender;
   ToolExecutionComponent.prototype.render = filteredToolRender;
 
   return () => {
     if (Theme.prototype.fg === highlightedForeground) Theme.prototype.fg = originalForeground;
+    if (Theme.prototype.bg === toolResultBackground) Theme.prototype.bg = originalBackground;
     if (UserMessageComponent.prototype.render === filteredUserRender) {
       UserMessageComponent.prototype.render = originalUserRender;
     }
@@ -124,7 +263,9 @@ export default function conversationPresentation(pi: ExtensionAPI): void {
       if (typeof reportView === "function") reportView(cycleConversationView());
     });
     if (!ctx.hasUI || restoreConversationPresentation) return;
-    restoreConversationPresentation = installConversationPresentation();
+    restoreConversationPresentation = installConversationPresentation(
+      createMessageMetadataResolver(ctx),
+    );
   });
   pi.on("session_shutdown", () => {
     restoreConversationPresentation?.();

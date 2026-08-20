@@ -16,35 +16,48 @@ describe("formatWorkPacket", () => {
     );
     expect(formatWorkPacket(workPacket)).toContain("Non-goals:\n- Changing API contracts.");
   });
+
+  test("identifies the spawning Pi session in the title", () => {
+    expect(formatWorkPacket(workPacket, "pi-session-123")).toStartWith(
+      "Work packet [spawned by pi-session-123]",
+    );
+  });
 });
 
 describe("resolveSubagentSpec", () => {
-  test("configures backend implementation like the main agent", () => {
-    const resolved = resolveSubagentSpec({
-      profile: "backend-implementer",
-      workPacket,
-      prompt: "Use the existing transaction helper.",
-    });
+  test("inherits the spawning agent model and thinking level", () => {
+    const resolved = resolveSubagentSpec(
+      {
+        profile: "backend-implementer",
+        workPacket,
+        prompt: "Use the existing transaction helper.",
+      },
+      { model: "anthropic/claude-sonnet-4", thinking: "xhigh" },
+      "pi-session-123",
+    );
 
-    expect(resolved.model).toBe("openai-codex/gpt-5.6-sol");
-    expect(resolved.thinking).toBe("high");
+    expect(resolved.model).toBe("anthropic/claude-sonnet-4");
+    expect(resolved.thinking).toBe("xhigh");
     expect(resolved.excludeTools).toEqual(["spawn_subagents", "manage_subagents"]);
     expect(resolved.tools).toContain("ask_main_agent");
     expect(resolved.systemPrompt).toContain("Prefer SQL queries over server code");
     expect(resolved.systemPrompt).toContain("Inspect examples under `app/src`");
-    expect(resolved.prompt?.startsWith("Work packet")).toBe(true);
+    expect(resolved.prompt?.startsWith("Work packet [spawned by pi-session-123]")).toBe(true);
     expect(resolved.prompt?.endsWith("Use the existing transaction helper.")).toBe(true);
   });
 
   test("preserves explicit overrides without enabling worker coordination", () => {
-    const resolved = resolveSubagentSpec({
-      profile: "frontend-implementer",
-      model: "custom/model",
-      thinking: "high",
-      tools: ["read", "spawn_subagents"],
-      excludeTools: ["write"],
-      systemPrompt: "Use the supplied design reference.",
-    });
+    const resolved = resolveSubagentSpec(
+      {
+        profile: "frontend-implementer",
+        model: "custom/model",
+        thinking: "high",
+        tools: ["read", "spawn_subagents"],
+        excludeTools: ["write"],
+        systemPrompt: "Use the supplied design reference.",
+      },
+      { model: "parent/model", thinking: "medium" },
+    );
 
     expect(resolved.model).toBe("custom/model");
     expect(resolved.thinking).toBe("high");
@@ -54,12 +67,15 @@ describe("resolveSubagentSpec", () => {
     expect(resolved.systemPrompt?.endsWith("Use the supplied design reference.")).toBe(true);
   });
 
-  test("allows a provider-only override to clear the profile model", () => {
-    const resolved = resolveSubagentSpec({
-      profile: "backend-implementer",
-      provider: "custom-provider",
-      workPacket,
-    });
+  test("allows a provider-only override to clear the inherited model", () => {
+    const resolved = resolveSubagentSpec(
+      {
+        profile: "backend-implementer",
+        provider: "custom-provider",
+        workPacket,
+      },
+      { model: "parent/model", thinking: "medium" },
+    );
 
     expect(resolved.provider).toBe("custom-provider");
     expect(resolved.model).toBeUndefined();

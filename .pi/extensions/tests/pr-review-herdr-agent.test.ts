@@ -8,6 +8,9 @@ import {
   runPiAgentInHerdr,
   silentReviewTabArgs,
 } from "../pr-review/herdr-agent";
+// @ts-expect-error Plain JavaScript runtime modules intentionally have no declaration files.
+const reviewAgentRuntime = await import("../pr-review/runtime/review-agents.js");
+const { buildReviewAgentArguments, selectedReviewAgentDefaults } = reviewAgentRuntime;
 
 const originalHerdrEnv = process.env.HERDR_ENV;
 const originalWorkspaceId = process.env.HERDR_WORKSPACE_ID;
@@ -32,6 +35,30 @@ afterEach(() => {
 });
 
 describe("PR review Herdr agents", () => {
+  test("inherits the spawning agent model and thinking level", () => {
+    const defaults = selectedReviewAgentDefaults(
+      { getThinkingLevel: () => "max" },
+      { model: { provider: "anthropic", id: "claude-opus-4-6" } },
+    );
+    const args = buildReviewAgentArguments(
+      { cwd: "/repo" },
+      {
+        laneId: "correctness",
+        ...defaults,
+        toolsEnabled: false,
+        allowedTools: "",
+        systemPrompt: "Review the PR.",
+      },
+    );
+
+    expect(defaults).toEqual({ model: "anthropic/claude-opus-4-6", thinking: "max" });
+    expect(args).toContain("anthropic/claude-opus-4-6");
+    expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual([
+      "--thinking",
+      "max",
+    ]);
+  });
+
   test("creates an unfocused silent tab", () => {
     const args = silentReviewTabArgs(
       "workspace-1",
@@ -124,7 +151,6 @@ describe("PR review Herdr agents", () => {
             "--system-prompt",
             "Review the PR.\nReturn JSON only.",
           ],
-          timeout: 1_000,
         },
       );
 
@@ -148,6 +174,51 @@ describe("PR review Herdr agents", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("waits for review-agent completion without a finite prompt timeout", async () => {
+    const calls: Array<{ args: string[]; options?: { timeout?: number } }> = [];
+    const pi = {
+      exec: async (_command: string, args: string[], options?: { timeout?: number }) => {
+        calls.push({ args, options });
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    const result = await runPiAgentInHerdr(
+      pi as never,
+      { cwd: "/repo", signal: undefined } as never,
+      {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+      },
+    );
+
+    expect(result.code).toBe(0);
+    const promptCall = calls.find(({ args }) => args[0] === "agent" && args[1] === "prompt");
+    expect(promptCall).toBeDefined();
+    expect(promptCall?.args).not.toContain("--timeout");
+    expect(promptCall?.options?.timeout).toBeUndefined();
   });
 
   test("retries when a new review pane is not ready yet", async () => {
@@ -196,7 +267,6 @@ describe("PR review Herdr agents", () => {
         label: "PR-correctness",
         prompt: "Review the PR",
         piArgs: ["--no-tools"],
-        timeout: 1_000,
       },
     );
 
@@ -247,7 +317,6 @@ describe("PR review Herdr agents", () => {
         label,
         prompt: "Review the PR",
         piArgs: ["--no-tools"],
-        timeout: 1_000,
       });
 
     await Promise.all([runAgent("PR-correctness"), runAgent("PR-tests")]);
@@ -296,7 +365,6 @@ describe("PR review Herdr agents", () => {
         label: "PR-correctness",
         prompt: "Review the PR",
         piArgs: ["--no-tools"],
-        timeout: 1_000,
       }),
     ).rejects.toThrow("could not start after 2 attempts");
     expect(calls.filter((args) => args[0] === "agent" && args[1] === "start")).toHaveLength(2);
@@ -333,7 +401,6 @@ describe("PR review Herdr agents", () => {
         label: "PR-correctness",
         prompt: "Review the PR",
         piArgs: ["--no-tools"],
-        timeout: 1_000,
       }),
     ).rejects.toThrow("invalid agent arguments");
     expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
@@ -365,7 +432,7 @@ describe("PR review Herdr agents", () => {
       runPiAgentInHerdr(
         { exec: async () => ({ code: 0, stdout: "", stderr: "" }) } as never,
         { cwd: "/repo", signal: undefined } as never,
-        { label: "PR-tests", prompt: "Review", piArgs: [], timeout: 1_000 },
+        { label: "PR-tests", prompt: "Review", piArgs: [] },
       ),
     ).rejects.toThrow("require Pi to run inside a Herdr workspace");
   });

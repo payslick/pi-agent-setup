@@ -41,7 +41,7 @@ export interface HerdrPiAgentInput {
   label: string;
   prompt: string;
   piArgs: readonly string[];
-  timeout: number;
+  timeout?: number;
   cwd?: string;
 }
 
@@ -72,9 +72,13 @@ const runHerdr = async <T>(
   ctx: ExtensionCommandContext,
   args: string[],
   cwd: string,
-  timeout = 30_000,
+  timeout: number | null = 30_000,
 ): Promise<T> => {
-  const result = await pi.exec("herdr", args, { cwd, signal: ctx.signal, timeout });
+  const result = await pi.exec("herdr", args, {
+    cwd,
+    signal: ctx.signal,
+    ...(timeout === null ? {} : { timeout }),
+  });
   if (result.code !== 0) {
     throw new Error(
       result.stderr.trim() || result.stdout.trim() || `herdr ${args.join(" ")} failed`,
@@ -308,11 +312,10 @@ export const runPiAgentInHerdr = async (
       "done",
       "--until",
       "blocked",
-      "--timeout",
-      String(input.timeout),
+      ...(input.timeout === undefined ? [] : ["--timeout", String(input.timeout)]),
     ],
     cwd,
-    input.timeout + 10_000,
+    input.timeout === undefined ? null : input.timeout + 10_000,
   );
   const current = await runHerdr<HerdrAgentResult>(pi, ctx, ["agent", "get", agentName], cwd);
   const agent = current.agent ?? {};

@@ -124,6 +124,9 @@ export const tabLabelForSpec = (spec: SubagentSpec): string =>
     .slice(0, MAX_TAB_LABEL_LENGTH)
     .replace(/-$/, "");
 
+export const sessionNameForSpec = (spec: SubagentSpec, parentSessionId: string): string =>
+  `${spec.workPacket ? "Work packet" : tabLabelForSpec(spec)} [spawned by ${parentSessionId}]`;
+
 const agentNameBase = (value: string): string => {
   const normalized = value
     .toLowerCase()

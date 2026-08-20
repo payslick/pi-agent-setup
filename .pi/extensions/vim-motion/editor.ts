@@ -317,6 +317,11 @@ export class VimMotionEditor extends CustomEditor {
       case "c":
         this.startOperator(key);
         return;
+      case "/":
+        this.clearPending();
+        this.setMode("insert");
+        super.handleInput(key);
+        return;
       case "i":
         this.clearPending();
         this.setMode("insert");

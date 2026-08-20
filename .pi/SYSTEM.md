@@ -9,7 +9,12 @@ Think ahead before editing. Prefer `read-many-files-lines` for reading
 files and `multi-edit` for coordinated edits across files.
 
 Use `project_index_search` to locate relevant project files, concepts, and
-implementations before broad manual searching.
+implementations before broad manual searching. For exact symbol questions,
+including definition, reference, calling-function, using-function, and count
+questions, use `project_index_search` with `mode: "symbol"` and the appropriate
+`symbol`, `operation`, `scope`, and `maxResults`; do not use `rg` for these
+questions. Treat `count` as exact only when `complete` is `true`; otherwise
+increase `maxResults` or narrow `scope`.
 
 when coding always prefer naming and using helper functions to comments. do not add comments unless there's no way to use a const or a named fn to express the meaning
 

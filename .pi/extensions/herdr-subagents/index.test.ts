@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
-import { piArgsForSpec, shouldPlayMainAgentSound } from "./index";
+import {
+  agentPromptArgs,
+  missingSubagentActionResult,
+  piArgsForSpec,
+  renderSubagentCompletionMessage,
+  shouldPlayMainAgentSound,
+} from "./index";
 import {
   agentNameForSpec,
   formatQuestionForMainAgent,
@@ -10,6 +17,7 @@ import {
   formatSubagentUsage,
   questionNeedsUserPrompt,
   restoreRecordsForWorkspace,
+  sessionNameForSpec,
   shortenHomePath,
   tabLabelForSpec,
   type SpawnedSubagentRecord,
@@ -28,6 +36,17 @@ const record = (id: string, workspaceId = "w1"): SpawnedSubagentRecord => ({
   outboxPath: "/tmp/outbox.jsonl",
   replaceSystemPrompt: false,
   createdAt: 1,
+});
+
+describe("agentPromptArgs", () => {
+  test("submits follow-up prompts without waiting for a working-state transition", () => {
+    expect(agentPromptArgs("w1:p2", "Finish now")).toEqual([
+      "agent",
+      "prompt",
+      "w1:p2",
+      "Finish now",
+    ]);
+  });
 });
 
 describe("piArgsForSpec", () => {
@@ -78,6 +97,16 @@ describe("piArgsForSpec", () => {
   });
 });
 
+describe("subagent management", () => {
+  test("silently ignores cleanup races for agents that already exited", () => {
+    expect(missingSubagentActionResult({ action: "abort", id: "finished-agent" })).toBe("");
+    expect(missingSubagentActionResult({ action: "close", id: "finished-agent" })).toBe("");
+    expect(() => missingSubagentActionResult({ action: "read", id: "missing-agent" })).toThrow(
+      "Unknown subagent: missing-agent.",
+    );
+  });
+});
+
 describe("main-agent sound", () => {
   test("plays only for an unfocused main Herdr agent", () => {
     expect(shouldPlayMainAgentSound({ HERDR_ENV: "1" }, false)).toBe(true);
@@ -105,6 +134,24 @@ describe("Herdr identity", () => {
       "AG-review-authentication",
     );
     expect(tabLabelForSpec({ prompt: "Reply exactly: smoke complete" })).toBe("AG-reply-smoke");
+  });
+
+  test("identifies the spawning Pi session in the child session title", () => {
+    expect(
+      sessionNameForSpec(
+        {
+          workPacket: {
+            objective: "Create schemas",
+            writableFiles: ["app/schema.ts"],
+            acceptanceCriteria: ["Schemas compile"],
+          },
+        },
+        "pi-session-123",
+      ),
+    ).toBe("Work packet [spawned by pi-session-123]");
+    expect(sessionNameForSpec({ prompt: "Review authentication" }, "pi-session-123")).toBe(
+      "AG-review-authentication [spawned by pi-session-123]",
+    );
   });
 
   test("creates a valid unique Herdr agent name", () => {
@@ -150,6 +197,38 @@ describe("question forwarding", () => {
 });
 
 describe("completion summaries", () => {
+  test("renders returned agent responses as collapsed Markdown", () => {
+    initTheme("dark");
+    const content = [
+      "Task: Create schemas",
+      "0:03 effort:high",
+      "✅ Added schemas.",
+      "Handoff:",
+      "## Handoff",
+      "- **Summary:** Added schema.ts",
+    ].join("\n");
+    const message = {
+      role: "custom",
+      customType: "herdr-subagent-completion",
+      content,
+      display: true,
+      timestamp: Date.now(),
+    } as const;
+    const theme = { fg: (_color: string, text: string) => text } as never;
+
+    const collapsed = renderSubagentCompletionMessage(message, { expanded: false }, theme);
+    const collapsedText = Bun.stripANSI(collapsed?.render(80).join("\n") ?? "");
+    expect(collapsedText).toContain("✅ Added schemas.");
+    expect(collapsedText).toContain("Ctrl+O to expand");
+    expect(collapsedText).not.toContain("Handoff");
+
+    const expanded = renderSubagentCompletionMessage(message, { expanded: true }, theme);
+    const expandedText = Bun.stripANSI(expanded?.render(80).join("\n") ?? "");
+    expect(expandedText).toContain("Handoff");
+    expect(expandedText).toContain("Summary: Added schema.ts");
+    expect(expandedText).not.toContain("**Summary:**");
+  });
+
   test("formats duration, model, and usage", () => {
     expect(formatSubagentDuration(123_400)).toBe("2:03");
     expect(

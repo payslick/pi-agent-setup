@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
-import { DEFAULT_SUBAGENT_MODEL, type SubagentSpec, type SubagentWorkPacket } from "./schemas";
+import type { SubagentSpec, SubagentWorkPacket } from "./schemas";
 
 export interface SubagentProfile {
-  model: string;
-  thinking: NonNullable<SubagentSpec["thinking"]>;
   tools: string[];
   excludeTools: string[];
   skills: string[];
@@ -13,8 +11,6 @@ export interface SubagentProfile {
 
 type SubagentProfileName = NonNullable<SubagentSpec["profile"]>;
 
-const MODEL = DEFAULT_SUBAGENT_MODEL;
-const THINKING = "high";
 const IMPLEMENTATION_TOOLS = [
   "read",
   "read-many-files-lines",
@@ -63,8 +59,6 @@ const REVIEW_PROMPT = readProfilePrompt("test-reviewer.md");
 
 export const SUBAGENT_PROFILES = {
   "frontend-implementer": {
-    model: MODEL,
-    thinking: THINKING,
     tools: FRONTEND_TOOLS,
     excludeTools: EXCLUDED_COORDINATION_TOOLS,
     skills: [
@@ -76,8 +70,6 @@ export const SUBAGENT_PROFILES = {
     systemPrompt: FRONTEND_PROMPT,
   },
   "backend-implementer": {
-    model: MODEL,
-    thinking: THINKING,
     tools: IMPLEMENTATION_TOOLS,
     excludeTools: EXCLUDED_COORDINATION_TOOLS,
     skills: [".pi/skills/code-index/SKILL.md", ".pi/skills/testing/SKILL.md"],
@@ -85,8 +77,6 @@ export const SUBAGENT_PROFILES = {
     systemPrompt: BACKEND_PROMPT,
   },
   "unit-test-implementer": {
-    model: MODEL,
-    thinking: THINKING,
     tools: IMPLEMENTATION_TOOLS,
     excludeTools: EXCLUDED_COORDINATION_TOOLS,
     skills: [".pi/skills/code-index/SKILL.md", ".pi/skills/testing/SKILL.md"],
@@ -94,8 +84,6 @@ export const SUBAGENT_PROFILES = {
     systemPrompt: UNIT_TEST_PROMPT,
   },
   "e2e-test-implementer": {
-    model: MODEL,
-    thinking: THINKING,
     tools: FRONTEND_TOOLS,
     excludeTools: EXCLUDED_COORDINATION_TOOLS,
     skills: [
@@ -108,8 +96,6 @@ export const SUBAGENT_PROFILES = {
     systemPrompt: E2E_TEST_PROMPT,
   },
   "test-reviewer": {
-    model: MODEL,
-    thinking: THINKING,
     tools: REVIEW_TOOLS,
     excludeTools: EXCLUDED_COORDINATION_TOOLS,
     skills: [
@@ -140,9 +126,9 @@ const definedSpecValues = (spec: SubagentSpec): SubagentSpec =>
     Object.entries(spec).filter(([, value]) => value !== undefined),
   ) as SubagentSpec;
 
-export const formatWorkPacket = (packet: SubagentWorkPacket): string =>
+export const formatWorkPacket = (packet: SubagentWorkPacket, parentSessionId?: string): string =>
   [
-    "Work packet",
+    parentSessionId ? `Work packet [spawned by ${parentSessionId}]` : "Work packet",
     `Objective:\n${packet.objective}`,
     `Writable files:\n${formatList(packet.writableFiles, "none; this is read-only work")}`,
     `Contract files (main-owned, read-only):\n${formatList(packet.contractFiles, "none")}`,
@@ -150,19 +136,27 @@ export const formatWorkPacket = (packet: SubagentWorkPacket): string =>
     `Non-goals:\n${formatList(packet.nonGoals, "none")}`,
   ].join("\n\n");
 
-export const resolveSubagentSpec = (spec: SubagentSpec): SubagentSpec => {
+export const resolveSubagentSpec = (
+  spec: SubagentSpec,
+  defaults: Pick<SubagentSpec, "model" | "thinking"> = {},
+  parentSessionId?: string,
+): SubagentSpec => {
   const profile = spec.profile ? SUBAGENT_PROFILES[spec.profile] : undefined;
   const explicit = definedSpecValues(spec);
-  const prompt = joinPromptParts(spec.workPacket && formatWorkPacket(spec.workPacket), spec.prompt);
+  const prompt = joinPromptParts(
+    spec.workPacket && formatWorkPacket(spec.workPacket, parentSessionId),
+    spec.prompt,
+  );
   const systemPrompt = joinPromptParts(profile?.systemPrompt, spec.systemPrompt);
   const excludeTools = mergeUnique(profile?.excludeTools, spec.excludeTools);
   const model =
-    spec.provider && spec.model === undefined ? undefined : (spec.model ?? profile?.model);
+    spec.provider && spec.model === undefined ? undefined : (spec.model ?? defaults.model);
 
   return {
     ...profile,
     ...explicit,
     model,
+    thinking: spec.thinking ?? defaults.thinking,
     excludeTools: excludeTools.length ? excludeTools : undefined,
     prompt: prompt || undefined,
     systemPrompt: systemPrompt || undefined,
