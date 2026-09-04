@@ -8,6 +8,19 @@ import {
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
+import { getAccessMode, getAccessProjectRoot, type AccessMode } from "../access-mode/state";
+import {
+  assertSubagentExecuteAccess,
+  piArgsForSpec,
+  resolveSubagentCwd,
+  subagentAccessEnvironment,
+} from "./access";
+export {
+  assertSubagentExecuteAccess,
+  piArgsForSpec,
+  resolveSubagentCwd,
+  subagentAccessEnvironment,
+} from "./access";
 import {
   contractFilesForSpec,
   validateImplementationAssignments,
@@ -105,52 +118,6 @@ const previewText = (text: string | undefined, maxLength = 140): string => {
 const clampReadLines = (lines: number | undefined): number => {
   if (typeof lines !== "number" || !Number.isFinite(lines)) return DEFAULT_READ_LINES;
   return Math.max(1, Math.min(MAX_READ_LINES, Math.floor(lines)));
-};
-
-const resolveCwd = (root: string, requested: string | undefined): string =>
-  requested ? path.resolve(root, requested) : root;
-
-const resolveProjectPath = (root: string, requested: string): string => {
-  const resolved = path.resolve(root, requested);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative))
-    throw new Error(`Subagent skill must stay inside ${root}: ${requested}`);
-  return resolved;
-};
-
-const appendSkillArgs = (args: string[], spec: SubagentSpec, projectRoot: string): void => {
-  if (spec.skills !== undefined) {
-    args.push("--no-skills");
-    for (const skill of spec.skills) args.push("--skill", resolveProjectPath(projectRoot, skill));
-    return;
-  }
-  if (spec.noSkills) args.push("--no-skills");
-};
-
-export const piArgsForSpec = (
-  spec: SubagentSpec,
-  projectRoot: string,
-  systemPromptArgument = spec.systemPrompt?.replace(/\s+/g, " ").trim(),
-): string[] => {
-  const args: string[] = [];
-  if (spec.provider) args.push("--provider", spec.provider);
-  if (spec.model || !spec.provider) args.push("--model", spec.model ?? DEFAULT_SUBAGENT_MODEL);
-  if (spec.thinking) args.push("--thinking", spec.thinking);
-  if (spec.noTools) args.push("--no-tools");
-  if (!spec.noTools && spec.noBuiltinTools) args.push("--no-builtin-tools");
-  if (spec.tools?.length) args.push("--tools", spec.tools.join(","));
-  if (spec.excludeTools?.length) args.push("--exclude-tools", spec.excludeTools.join(","));
-  if (spec.inheritContext === false) args.push("--no-context-files");
-  if (spec.noExtensions) args.push("--no-extensions");
-  appendSkillArgs(args, spec, projectRoot);
-  if (spec.noPromptTemplates) args.push("--no-prompt-templates");
-  if (systemPromptArgument) {
-    args.push(
-      spec.replaceSystemPrompt ? "--system-prompt" : "--append-system-prompt",
-      systemPromptArgument,
-    );
-  }
-  return args;
 };
 
 const runHerdr = async <T>(
@@ -390,6 +357,8 @@ const spawnOneSubagent = async (
   ctx: ExtensionContext,
   workspaceId: string,
   spec: SubagentSpec,
+  mode: AccessMode,
+  projectRoot: string,
 ): Promise<SpawnedSubagentRecord> => {
   const parentSessionId = ctx.sessionManager.getSessionId();
   const resolved = resolveSubagentSpec(spec, spawningAgentDefaults(pi, ctx), parentSessionId);
@@ -397,13 +366,15 @@ const spawnOneSubagent = async (
   const name = agentNameForSpec(resolved, id);
   const tabLabel = tabLabelForSpec(resolved);
   const sessionName = sessionNameForSpec(resolved, parentSessionId);
-  const cwd = resolveCwd(ctx.cwd, resolved.cwd);
+  const cwd = await resolveSubagentCwd(ctx.cwd, resolved.cwd, mode, projectRoot);
   const outboxPath = await writeOutboxEnv(ctx.cwd, id);
   const systemPromptPath = await writeSystemPromptFile(ctx.cwd, id, resolved.systemPrompt);
   const created = await createTab(pi, ctx, workspaceId, cwd, tabLabel, resolved.focus ?? false, {
     PI_SUBAGENT_ID: id,
     PI_SUBAGENT_NAME: name,
+    PI_SUBAGENT_TYPE: resolved.profile ?? "subagent",
     PI_SUBAGENT_OUTBOX: outboxPath,
+    ...subagentAccessEnvironment(mode, projectRoot),
   });
   const record: SpawnedSubagentRecord = {
     id,
@@ -430,7 +401,7 @@ const spawnOneSubagent = async (
   };
   try {
     await startAgent(pi, ctx, name, record.paneId, [
-      ...piArgsForSpec(resolved, ctx.cwd, systemPromptPath),
+      ...piArgsForSpec(resolved, projectRoot, systemPromptPath, mode),
       "--name",
       sessionName,
       "--append-system-prompt",
@@ -457,12 +428,16 @@ const spawnSubagents = async (
   try {
     if (input.agents.length > MAX_SUBAGENTS_PER_CALL)
       throw new Error(`Too many subagents; max is ${MAX_SUBAGENTS_PER_CALL}.`);
+    const mode = getAccessMode();
+    assertSubagentExecuteAccess(mode);
+    const projectRoot = getAccessProjectRoot(ctx.cwd);
     const herdr = ensureHerdr();
     await pruneMissingRecords(pi, ctx.signal, herdr.workspaceId);
     validateImplementationAssignments(input.agents, [...registry.values()], ctx.cwd);
     const records: SpawnedSubagentRecord[] = [];
-    for (const spec of input.agents)
-      records.push(await spawnOneSubagent(pi, ctx, herdr.workspaceId, spec));
+    for (const spec of input.agents) {
+      records.push(await spawnOneSubagent(pi, ctx, herdr.workspaceId, spec, mode, projectRoot));
+    }
     return records;
   } finally {
     spawnLock = false;
@@ -747,6 +722,7 @@ const handleManageAction = async (
   ctx: ExtensionContext,
   input: ManageSubagentsInput,
 ): Promise<string> => {
+  assertSubagentExecuteAccess();
   const herdr = ensureHerdr();
   const removed = await pruneMissingRecords(pi, ctx.signal, herdr.workspaceId);
   if (input.action === "list") {

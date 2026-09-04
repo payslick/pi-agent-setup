@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
+import { ACCESS_MODE_STATUS_KEY } from "./access-mode";
 import { PREFIX_STATUS_KEY } from "./prefix-mode/registry";
 import { SESSION_SEARCH_STATUS_KEY } from "./prefix-mode/session-search";
 
@@ -288,6 +289,7 @@ const secondaryFooterStatuses = (
     ...statusEntries
       .filter(
         ([key]) =>
+          key !== ACCESS_MODE_STATUS_KEY &&
           key !== CODEX_STATUS_KEY &&
           key !== VIM_STATUS_KEY &&
           key !== BRANCH_PR_STATUS_KEY &&
@@ -354,6 +356,9 @@ function installFooter(ctx: ExtensionContext): void {
         const usage = ctx.getContextUsage();
         const percent = usage?.percent == null ? "?" : `${usage.percent.toFixed(1)}%`;
         const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+        const accessStatus = oneLine(
+          statusEntries.find(([key]) => key === ACCESS_MODE_STATUS_KEY)?.[1] ?? "",
+        );
         const codexStatus = oneLine(
           statusEntries.find(([key]) => key === CODEX_STATUS_KEY)?.[1] ?? "",
         );
@@ -402,8 +407,15 @@ function installFooter(ctx: ExtensionContext): void {
         ];
 
         const statuses = secondaryFooterStatuses(statusEntries, vimStatus);
-        if (statuses.length)
-          lines.push(truncateToWidth(statuses.join(" "), width, theme.fg("dim", "...")));
+        if (statuses.length || accessStatus)
+          lines.push(
+            alignSides(
+              statuses.join(" "),
+              theme.fg("accent", accessStatus),
+              width,
+              theme.fg("dim", "..."),
+            ),
+          );
         return lines;
       },
     };

@@ -47,12 +47,15 @@ describe("PR review Herdr agents", () => {
         ...defaults,
         toolsEnabled: false,
         allowedTools: "",
-        systemPrompt: "Review the PR.",
+        systemPrompt: "Review the PR.\nReturn JSON only.",
       },
     );
 
     expect(defaults).toEqual({ model: "anthropic/claude-opus-4-6", thinking: "max" });
     expect(args).toContain("anthropic/claude-opus-4-6");
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe(
+      "Review the PR.\nReturn JSON only.",
+    );
     expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual([
       "--thinking",
       "max",
@@ -106,6 +109,13 @@ describe("PR review Herdr agents", () => {
       })}\n`,
     );
     const calls: string[][] = [];
+    const systemPrompt = `Review the PR.\n${"Return JSON only. ".repeat(500)}`;
+    const appendSystemPrompt = "Keep the output deterministic.\nDo not add prose.";
+    const existingPromptPath = join(directory, "existing-system-prompt.md");
+    const existingPrompt = "This prompt was already file-backed.";
+    await writeFile(existingPromptPath, existingPrompt);
+    let startupPromptPaths: string[] = [];
+    let loadedSystemPrompts: string[] = [];
     const pi = {
       exec: async (command: string, args: string[]) => {
         expect(command).toBe("herdr");
@@ -118,6 +128,14 @@ describe("PR review Herdr agents", () => {
             }),
             stderr: "",
           };
+        }
+        if (args[0] === "agent" && args[1] === "start") {
+          startupPromptPaths = args.filter((_argument, index) =>
+            ["--system-prompt", "--append-system-prompt"].includes(args[index - 1] ?? ""),
+          );
+          loadedSystemPrompts = await Promise.all(
+            startupPromptPaths.map((promptPath) => readFile(promptPath, "utf8")),
+          );
         }
         if (args[0] === "agent" && args[1] === "get") {
           return {
@@ -140,7 +158,7 @@ describe("PR review Herdr agents", () => {
     try {
       const result = await runPiAgentInHerdr(
         pi as never,
-        { cwd: "/repo", signal: undefined } as never,
+        { cwd: directory, signal: undefined } as never,
         {
           label: "PR-correctness",
           prompt: "Review the PR",
@@ -149,7 +167,11 @@ describe("PR review Herdr agents", () => {
             "openai-codex/gpt-5.6-sol",
             "--no-tools",
             "--system-prompt",
-            "Review the PR.\nReturn JSON only.",
+            systemPrompt,
+            "--append-system-prompt",
+            appendSystemPrompt,
+            "--append-system-prompt",
+            existingPromptPath,
           ],
         },
       );
@@ -164,7 +186,17 @@ describe("PR review Herdr agents", () => {
       expect(startCall).toContain("pane-1");
       expect(startCall).not.toContain("--print");
       expect(startCall?.every((argument) => !/[\r\n]/.test(argument))).toBeTrue();
-      expect(startCall).toContain("Review the PR. Return JSON only.");
+      const systemPromptPath = startCall?.[startCall.indexOf("--system-prompt") + 1];
+      expect(systemPromptPath).toContain(".pi/tmp/pr-review-agents/");
+      expect(systemPromptPath?.length).toBeLessThan(systemPrompt.length);
+      expect(startupPromptPaths).toHaveLength(3);
+      expect(startupPromptPaths[1]).toContain(".pi/tmp/pr-review-agents/");
+      expect(startupPromptPaths[2]).toBe(existingPromptPath);
+      expect(loadedSystemPrompts).toEqual([systemPrompt, appendSystemPrompt, existingPrompt]);
+      expect(startCall).not.toContain(systemPrompt);
+      expect(await Bun.file(startupPromptPaths[0] ?? "").exists()).toBeFalse();
+      expect(await Bun.file(startupPromptPaths[1] ?? "").exists()).toBeFalse();
+      expect(await Bun.file(existingPromptPath).exists()).toBeTrue();
       expect(promptCall).toContain("Review the PR");
       expect(promptCall).toContain("idle");
       expect(promptCall).toContain("done");

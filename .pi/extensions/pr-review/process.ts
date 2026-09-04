@@ -424,6 +424,26 @@ export const buildImmediateFixPrompt = (
     `Process approved review work for PR #${pr.ref.number} (${pr.title}).`,
     `Expected branch: ${branch.prBranch}; current branch was verified before planning. Recheck the PR head SHA and branch before editing.`,
     "",
+    "## Pre-edit all-comment pattern review",
+    "Do not make any code, test, configuration, documentation, or generated-file change until you have reviewed every comment in the complete included PR comment inventory below together.",
+    "Identify repeated or semantically equivalent requests across comments, then inspect the full PR diff and all PR-changed files for every occurrence of each pattern. Do not limit the search to the exact lines reviewers commented on.",
+    "Before editing, build an internal checklist that maps each approved or mandatory recurring pattern to every place it applies within the PR. Implement that pattern consistently everywhere it applies in the PR, including uncommented occurrences, and validate every mapped occurrence.",
+    "Context-only comments may reveal a repeated pattern, but do not independently implement a distinct unapproved request. They become actionable only when they describe the same underlying pattern as approved or mandatory work.",
+    "Keep this consistency pass within the PR's changed files and behavior; do not expand it into unrelated repository-wide cleanup.",
+    "",
+    "## Complete included PR comment inventory",
+    ...plan.discussions.flatMap((discussion) => {
+      let handling = "context only—not independently approved";
+      if (selectedIds.has(discussion.id)) handling = "approved work";
+      if (mandatoryPolicyIds.has(discussion.id)) handling = "mandatory policy";
+      if (commandDiscussionIds.has(discussion.id)) handling = "mandatory command";
+      return [
+        `### ${discussion.id} — ${handling}`,
+        `Location: ${commentLocation(discussion.rootComment)}`,
+        `Conversation: ${discussion.comments.map((comment) => `${comment.author.login}: ${compact(comment.body)}`).join(" | ")}`,
+        "",
+      ];
+    }),
     `Authenticated GitHub user: @${plan.viewerLogin}.`,
     `Every included comment by @${plan.viewerLogin} is an actionable command. Implement it regardless of its analyzed priority; comments beginning with ${AI_IGNORE_PREFIX} were excluded.`,
     "ALWAYS/NEVER comments are mandatory immediate fixes regardless of their long-term policy decisions. Fix each commented instance and add focused regression coverage when behavior changes.",

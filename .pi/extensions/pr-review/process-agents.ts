@@ -64,6 +64,31 @@ const dispositionValues = new Set<PostReviewDisposition>([
   "no_action",
 ]);
 
+export const DEFAULT_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS = 600_000;
+export const DEFAULT_REVIEW_PROCESS_PATTERN_TIMEOUT_MS = 600_000;
+
+const positiveTimeoutOrDefault = (configured: string | undefined, fallback: number): number => {
+  if (!configured?.trim()) return fallback;
+  const timeout = Number(configured);
+  return Number.isFinite(timeout) && timeout > 0 ? timeout : fallback;
+};
+
+export const reviewProcessAnalysisTimeout = (
+  environment: NodeJS.ProcessEnv = process.env,
+): number =>
+  positiveTimeoutOrDefault(
+    environment.PI_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS,
+    DEFAULT_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS,
+  );
+
+export const reviewProcessPatternTimeout = (
+  environment: NodeJS.ProcessEnv = process.env,
+): number =>
+  positiveTimeoutOrDefault(
+    environment.PI_REVIEW_PROCESS_PATTERN_TIMEOUT_MS,
+    DEFAULT_REVIEW_PROCESS_PATTERN_TIMEOUT_MS,
+  );
+
 export const analyzeReviewDiscussions = async (
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
@@ -85,7 +110,7 @@ export const analyzeReviewDiscussions = async (
     label: "PR-process-analysis",
     thinking: "high",
     tools: false,
-    timeout: Number(process.env.PI_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS ?? 180_000),
+    timeout: reviewProcessAnalysisTimeout(),
   });
   const parsed = parseJsonRecord(result.stdout);
   const rawAnalyses = Array.isArray(parsed?.analyses) ? parsed.analyses : [];
@@ -121,7 +146,7 @@ export const estimatePolicyPattern = async (
       label: `PR-policy-${policy.id}`,
       thinking: "high",
       tools: true,
-      timeout: Number(process.env.PI_REVIEW_PROCESS_PATTERN_TIMEOUT_MS ?? 240_000),
+      timeout: reviewProcessPatternTimeout(),
     });
     return normalizeEstimate(parseJsonRecord(result.stdout));
   } catch {
@@ -138,7 +163,7 @@ const runPiAgent = async (
     label: string;
     thinking: "high" | "medium";
     tools: boolean;
-    timeout: number;
+    timeout?: number;
   },
 ) => {
   const configuredModel = process.env.PI_REVIEW_PROCESS_MODEL;

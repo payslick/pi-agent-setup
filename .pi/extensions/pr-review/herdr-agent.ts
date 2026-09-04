@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
@@ -164,13 +165,51 @@ export const silentReviewTabArgs = (
   "--no-focus",
 ];
 
-const shellSafePiArguments = (piArgs: readonly string[]): string[] =>
-  piArgs.map((argument, index) => {
-    const previousArgument = piArgs[index - 1];
-    if (previousArgument !== "--system-prompt" && previousArgument !== "--append-system-prompt")
-      return argument;
-    return argument.replace(/\s+/g, " ").trim();
-  });
+const REVIEW_AGENT_PROMPT_ROOT = path.join(".pi", "tmp", "pr-review-agents");
+const SYSTEM_PROMPT_ARGUMENTS = new Set(["--system-prompt", "--append-system-prompt"]);
+
+const promptArgumentReferencesPath = async (cwd: string, argument: string): Promise<boolean> => {
+  try {
+    await stat(path.resolve(cwd, argument));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+interface FileBackedPiArguments {
+  args: string[];
+  cleanup: () => Promise<void>;
+}
+
+const fileBackedPiArguments = async (
+  piArgs: readonly string[],
+  cwd: string,
+  agentName: string,
+): Promise<FileBackedPiArguments> => {
+  const prepared = [...piArgs];
+  let promptDirectory: string | undefined;
+  const cleanup = async (): Promise<void> => {
+    if (promptDirectory)
+      await rm(promptDirectory, { recursive: true, force: true }).catch(() => undefined);
+  };
+  try {
+    for (let index = 1; index < prepared.length; index += 1) {
+      if (!SYSTEM_PROMPT_ARGUMENTS.has(prepared[index - 1] ?? "")) continue;
+      const prompt = prepared[index] ?? "";
+      if (await promptArgumentReferencesPath(cwd, prompt)) continue;
+      promptDirectory ??= path.resolve(cwd, REVIEW_AGENT_PROMPT_ROOT, agentName);
+      await mkdir(promptDirectory, { recursive: true, mode: 0o700 });
+      const promptPath = path.join(promptDirectory, `${index}.system-prompt.md`);
+      await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
+      prepared[index] = promptPath;
+    }
+    return { args: prepared, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+};
 
 class ReviewAgentStartupError extends Error {}
 
@@ -234,14 +273,14 @@ const startReviewAgent = async (
           "--pane",
           paneId,
           "--timeout",
-          "60000",
+          "300000",
           "--",
-          ...shellSafePiArguments(input.piArgs),
+          ...input.piArgs,
           "--name",
           label,
         ],
         cwd,
-        70_000,
+        310_000,
       );
       return;
     } catch (error) {
@@ -275,58 +314,64 @@ export const runPiAgentInHerdr = async (
   const subagentId = randomUUID();
   const label = compactLabel(input.label);
   const agentName = `${safeName(label).slice(0, 22)}-${subagentId.replace(/-/g, "").slice(0, 8)}`;
-  const { tabId } = await withReviewAgentStartupLock(async () => {
-    const created = await runHerdr<HerdrTabResult>(
+  const prepared = await fileBackedPiArguments(input.piArgs, cwd, agentName);
+  const preparedInput = { ...input, piArgs: prepared.args };
+  try {
+    const { tabId } = await withReviewAgentStartupLock(async () => {
+      const created = await runHerdr<HerdrTabResult>(
+        pi,
+        ctx,
+        silentReviewTabArgs(workspaceId, cwd, label, subagentId, agentName),
+        cwd,
+      );
+      const createdTabId = created.tab?.tab_id;
+      const paneId = created.root_pane?.pane_id;
+      if (!createdTabId || !paneId)
+        throw new Error("Herdr did not return a review-agent tab and pane.");
+
+      try {
+        await startReviewAgent(pi, ctx, preparedInput, cwd, label, agentName, paneId);
+      } catch (error) {
+        await runHerdr(pi, ctx, ["tab", "close", createdTabId], cwd).catch(() => undefined);
+        if (error instanceof ReviewAgentStartupError) notifyReviewAgentStartupFailure(ctx, error);
+        throw error;
+      }
+      return { tabId: createdTabId };
+    });
+
+    await runHerdr<HerdrAgentResult>(
       pi,
       ctx,
-      silentReviewTabArgs(workspaceId, cwd, label, subagentId, agentName),
+      [
+        "agent",
+        "prompt",
+        agentName,
+        input.prompt,
+        "--wait",
+        "--until",
+        "idle",
+        "--until",
+        "done",
+        "--until",
+        "blocked",
+        ...(input.timeout === undefined ? [] : ["--timeout", String(input.timeout)]),
+      ],
       cwd,
+      input.timeout === undefined ? null : input.timeout + 10_000,
     );
-    const createdTabId = created.tab?.tab_id;
-    const paneId = created.root_pane?.pane_id;
-    if (!createdTabId || !paneId)
-      throw new Error("Herdr did not return a review-agent tab and pane.");
-
-    try {
-      await startReviewAgent(pi, ctx, input, cwd, label, agentName, paneId);
-    } catch (error) {
-      await runHerdr(pi, ctx, ["tab", "close", createdTabId], cwd).catch(() => undefined);
-      if (error instanceof ReviewAgentStartupError) notifyReviewAgentStartupFailure(ctx, error);
-      throw error;
-    }
-    return { tabId: createdTabId };
-  });
-
-  await runHerdr<HerdrAgentResult>(
-    pi,
-    ctx,
-    [
-      "agent",
-      "prompt",
-      agentName,
-      input.prompt,
-      "--wait",
-      "--until",
-      "idle",
-      "--until",
-      "done",
-      "--until",
-      "blocked",
-      ...(input.timeout === undefined ? [] : ["--timeout", String(input.timeout)]),
-    ],
-    cwd,
-    input.timeout === undefined ? null : input.timeout + 10_000,
-  );
-  const current = await runHerdr<HerdrAgentResult>(pi, ctx, ["agent", "get", agentName], cwd);
-  const agent = current.agent ?? {};
-  const stdout = await readAgentOutput(pi, ctx, agentName, agent, cwd);
-  const blocked = agent.agent_status === "blocked";
-  const code = blocked || !stdout ? 1 : 0;
-  const stderr = blocked
-    ? "Review agent is blocked."
-    : !stdout
-      ? "Review agent returned no output."
-      : "";
-  if (code === 0) await runHerdr(pi, ctx, ["tab", "close", tabId], cwd);
-  return { code, stdout, stderr, tabId };
+    const current = await runHerdr<HerdrAgentResult>(pi, ctx, ["agent", "get", agentName], cwd);
+    const agent = current.agent ?? {};
+    const stdout = await readAgentOutput(pi, ctx, agentName, agent, cwd);
+    const blocked = agent.agent_status === "blocked";
+    const code = blocked || !stdout ? 1 : 0;
+    const stderr = blocked
+      ? "Review agent is blocked."
+      : !stdout
+        ? "Review agent returned no output."
+        : "";
+    if (code === 0) await runHerdr(pi, ctx, ["tab", "close", tabId], cwd);
+    return { code, stdout, stderr, tabId };
+  } finally {
+    await prepared.cleanup();
+  }
 };

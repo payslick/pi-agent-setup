@@ -1,7 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import {
   AssistantMessageComponent,
-  createReadToolDefinition,
   type ExtensionAPI,
   type ExtensionContext,
   type ReadToolInput,
@@ -10,7 +9,8 @@ import {
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { CONVERSATION_VIEW_CYCLE_EVENT, type ConversationView } from "./conversation-view";
 
@@ -25,7 +25,7 @@ const TOOL_ERROR_BACKGROUND = "\x1b[48;2;69;25;29m";
 const MESSAGE_METADATA_WIDTH = 6;
 const LONG_MESSAGE_LINE_COUNT = 10;
 const MARKDOWN_RESPONSE_INSTRUCTION =
-  "Write every assistant response in Markdown. Use headings, lists, tables, blockquotes, and fenced code blocks when they improve clarity. Keep H1 headings unchanged. Render H2 through H6 with `##` so Pi does not display literal heading hashes, and prefix the heading text with one `>` for each level below H1: `## > H2`, `## > > H3`, through `## > > > > > H6`. Do not wrap the entire response in a code fence.";
+  "Write every assistant response in Markdown. Use headings, lists, tables, blockquotes, and fenced code blocks when they improve clarity. Keep H1 headings unchanged. Render H2 through H6 with `##` so Pi does not display literal heading hashes, and prefix the heading text with one `>` for each heading level: `## > > H2`, `## > > > H3`, through `## > > > > > > H6`. Do not wrap the entire response in a code fence.";
 
 const CONVERSATION_VIEWS: ConversationView[] = ["both", "messages", "responses"];
 type ConversationItem = Exclude<ConversationView, "both">;
@@ -155,17 +155,55 @@ export const createMessageMetadataResolver = (ctx: ExtensionContext): MessageMet
   };
 };
 
+export function formatMarkdownHeadingsForTerminal(markdown: string): string {
+  let fence: { marker: string; length: number } | undefined;
+
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+      if (fenceMatch) {
+        const markerSequence = fenceMatch[1] ?? "";
+        const marker = markerSequence[0] ?? "";
+        const remainder = fenceMatch[2] ?? "";
+        if (!fence) {
+          fence = { marker, length: markerSequence.length };
+          return line;
+        }
+        if (
+          marker === fence.marker &&
+          markerSequence.length >= fence.length &&
+          remainder.trim() === ""
+        ) {
+          fence = undefined;
+        }
+        return line;
+      }
+      if (fence) return line;
+
+      const headingMatch = line.match(/^( {0,3})(#{3,6})[ \t]+(.+?)\r?$/);
+      if (!headingMatch) return line;
+      const [, indentation = "", hashes = "", rawHeading = ""] = headingMatch;
+      const heading = rawHeading.replace(/[ \t]+#+[ \t]*$/, "");
+      const chevrons = Array.from({ length: hashes.length }, () => ">").join(" ");
+      return `${indentation}## ${chevrons} ${heading}`;
+    })
+    .join("\n");
+}
+
 export function installConversationPresentation(
   resolveMetadata: MessageMetadataResolver = () => ({ timestamp: Date.now() }),
 ): () => void {
   const originalForeground = Theme.prototype.fg;
   const originalBackground = Theme.prototype.bg;
   const originalUserRender = UserMessageComponent.prototype.render;
+  const originalAssistantUpdate = AssistantMessageComponent.prototype.updateContent;
   const originalAssistantRender = AssistantMessageComponent.prototype.render;
   const originalToolRender = ToolExecutionComponent.prototype.render;
   const messageNumbers = new WeakMap<ConversationMessageComponent, number>();
   let nextMessageNumber = 1;
   let userPromptRenderDepth = 0;
+  let assistantMarkdownRenderDepth = 0;
 
   const metadataFor = (
     component: ConversationMessageComponent,
@@ -183,6 +221,9 @@ export function installConversationPresentation(
 
   const highlightedForeground = function (this: Theme, color: ThemeColor, text: string): string {
     if (userPromptRenderDepth > 0) return white(text);
+    if (assistantMarkdownRenderDepth > 0 && color === "mdListBullet") {
+      return originalForeground.call(this, color, text.replace(/^- /, "• "));
+    }
     return originalForeground.call(this, color, text);
   };
   const toolResultBackground = function (
@@ -205,11 +246,30 @@ export function installConversationPresentation(
       userPromptRenderDepth -= 1;
     }
   };
+  const formattedAssistantUpdate = function (
+    this: AssistantMessageComponent,
+    message: AssistantMessage,
+  ): void {
+    originalAssistantUpdate.call(this, {
+      ...message,
+      content: message.content.map((block) =>
+        block.type === "text"
+          ? { ...block, text: formatMarkdownHeadingsForTerminal(block.text) }
+          : block,
+      ),
+    });
+  };
   const filteredAssistantRender = function (
     this: AssistantMessageComponent,
     width: number,
   ): string[] {
-    const lines = originalAssistantRender.call(this, Math.max(1, width - MESSAGE_METADATA_WIDTH));
+    assistantMarkdownRenderDepth += 1;
+    let lines: string[];
+    try {
+      lines = originalAssistantRender.call(this, Math.max(1, width - MESSAGE_METADATA_WIDTH));
+    } finally {
+      assistantMarkdownRenderDepth -= 1;
+    }
     const metadata = metadataFor(this, lines);
     if (!isConversationItemVisible("responses")) return [];
     return annotateMessageLines(lines, width, metadata);
@@ -222,6 +282,7 @@ export function installConversationPresentation(
   Theme.prototype.fg = highlightedForeground;
   Theme.prototype.bg = toolResultBackground;
   UserMessageComponent.prototype.render = filteredUserRender;
+  AssistantMessageComponent.prototype.updateContent = formattedAssistantUpdate;
   AssistantMessageComponent.prototype.render = filteredAssistantRender;
   ToolExecutionComponent.prototype.render = filteredToolRender;
 
@@ -230,6 +291,9 @@ export function installConversationPresentation(
     if (Theme.prototype.bg === toolResultBackground) Theme.prototype.bg = originalBackground;
     if (UserMessageComponent.prototype.render === filteredUserRender) {
       UserMessageComponent.prototype.render = originalUserRender;
+    }
+    if (AssistantMessageComponent.prototype.updateContent === formattedAssistantUpdate) {
+      AssistantMessageComponent.prototype.updateContent = originalAssistantUpdate;
     }
     if (AssistantMessageComponent.prototype.render === filteredAssistantRender) {
       AssistantMessageComponent.prototype.render = originalAssistantRender;
@@ -241,20 +305,8 @@ export function installConversationPresentation(
 }
 
 export default function conversationPresentation(pi: ExtensionAPI): void {
-  const readTool = createReadToolDefinition(process.cwd());
   let restoreConversationPresentation: (() => void) | undefined;
   let unsubscribeConversationView: (() => void) | undefined;
-
-  pi.registerTool({
-    ...readTool,
-    renderCall(args, theme) {
-      const title = theme.fg("toolTitle", theme.bold("read"));
-      return new Text(`${title} ${theme.fg("toolOutput", formatReadInput(args))}`, 0, 0);
-    },
-    renderResult() {
-      return new Text("", 0, 0);
-    },
-  });
 
   pi.on("before_agent_start", () => ({ systemPrompt: MARKDOWN_RESPONSE_INSTRUCTION }));
   pi.on("session_start", (_event, ctx) => {

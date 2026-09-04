@@ -12,6 +12,7 @@ import {
   Container,
   Spacer,
   Text,
+  sliceByColumn,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -20,14 +21,22 @@ import {
 import type { Static } from "typebox";
 import { Type } from "typebox";
 
+import { assertProjectPath, resolveAccessPath } from "./access-mode/path-policy";
+import {
+  canWrite,
+  getAccessMode,
+  getAccessProjectRoot,
+  subscribeToAccessMode,
+  type AccessMode,
+} from "./access-mode/state";
 import {
   POST_EDIT_VALIDATION_REQUEST_EVENT,
   type PostEditValidationRequest,
-} from "./post-edit-validation-events";
+} from "./post-edit-validation/events";
 
 const TOOL_NAME = "multi-edit";
 const DISABLED_TOOL_NAME = "edit";
-const PARENT_PATH_SEGMENT = "." + ".";
+const MULTI_EDIT_ACCESS_ERROR = "The current access mode blocks multi-edit.";
 const COLLAPSED_BLOCK_LINES = 2;
 export const CONSECUTIVE_EDIT_REMINDER =
   "Reminder: this was a consecutive edit call. Plan related replacements together and combine them into as few multi-edit tool calls as possible.";
@@ -65,9 +74,27 @@ export interface MultiEditLineCount {
   removedLines: number;
 }
 
+interface MultiEditDiff {
+  path: string;
+  diff: string;
+}
+
+interface MultiEditEditRanges {
+  path: string;
+  ranges: Array<{ startLine: number; endLine: number }>;
+}
+
 interface MultiEditDetails {
   changedFiles: string[];
   lineCounts: MultiEditLineCount[];
+  diffs: MultiEditDiff[];
+  editRanges: MultiEditEditRanges[];
+}
+
+interface AppliedMultiEdit {
+  changedFiles: string[];
+  originals: Array<{ path: string; content: string }>;
+  editRanges: MultiEditEditRanges[];
 }
 
 interface Replacement {
@@ -77,13 +104,15 @@ interface Replacement {
   end: number;
 }
 
-function resolveInsideRoot(root: string, filePath: string): string | null {
-  const absolutePath = path.resolve(root, filePath);
-  const relativePath = path.relative(root, absolutePath);
-  const insideRoot =
-    relativePath === "" ||
-    (!relativePath.startsWith(PARENT_PATH_SEGMENT) && !path.isAbsolute(relativePath));
-  return insideRoot ? absolutePath : null;
+async function resolveEditablePath(
+  root: string,
+  projectRoot: string,
+  filePath: string,
+  mode: AccessMode,
+): Promise<string> {
+  const absolutePath = resolveAccessPath(root, filePath);
+  await assertProjectPath(projectRoot, absolutePath, mode);
+  return absolutePath;
 }
 
 function countOccurrences(text: string, needle: string): number[] {
@@ -186,15 +215,31 @@ export function layoutCodeLine(
   filePath: string,
   expanded: boolean,
   width: number,
+  focusColumn?: number,
 ): string[] {
   const normalizedLine = line.replaceAll("\t", "   ");
   const indentation = normalizedLine.match(/^\s*/)?.[0] ?? "";
   const code = normalizedLine.slice(indentation.length);
   const highlightedCode = highlightCode(code, getLanguageFromPath(filePath))[0] ?? code;
+  const highlightedLine = `${indentation}${highlightedCode}`;
   const availableWidth = Math.max(1, width);
 
   if (!expanded) {
-    return [truncateToWidth(`${indentation}${highlightedCode}`, availableWidth, "…")];
+    const lineWidth = visibleWidth(highlightedLine);
+    if (lineWidth <= availableWidth || focusColumn === undefined) {
+      return [truncateToWidth(highlightedLine, availableWidth, "…")];
+    }
+
+    const contentWidth = Math.max(1, availableWidth - 1);
+    const normalizedFocus = Math.max(0, Math.min(focusColumn, lineWidth));
+    const start = Math.max(
+      0,
+      Math.min(normalizedFocus - Math.floor(contentWidth / 2), lineWidth - contentWidth),
+    );
+    if (start === 0) return [truncateToWidth(highlightedLine, availableWidth, "…")];
+    return [
+      truncateToWidth(`…${sliceByColumn(highlightedLine, start, lineWidth)}`, availableWidth, "…"),
+    ];
   }
 
   const fittedIndentation = truncateToWidth(indentation, Math.max(0, availableWidth - 1), "");
@@ -203,23 +248,101 @@ export function layoutCodeLine(
   return wrappedCode.map((segment) => `${fittedIndentation}${segment}`);
 }
 
-function renderCodeBlock(
-  text: string,
+interface ChangedLine {
+  content: string;
+  lineNumber: number;
+  kind: "added" | "removed";
+  focusColumn?: number;
+}
+
+function changedOnlyDiff(original: string, updated: string): string {
+  const { diff } = generateDiffString(original, updated, 0);
+  return diff
+    .split("\n")
+    .filter((line) => line.startsWith("+") || line.startsWith("-"))
+    .join("\n");
+}
+
+function changedColumn(line: string, counterpart: string): number {
+  let index = 0;
+  while (index < line.length && index < counterpart.length && line[index] === counterpart[index]) {
+    index += 1;
+  }
+  return visibleWidth(line.slice(0, index).replaceAll("\t", "   "));
+}
+
+function parseChangedLines(diff: string): ChangedLine[] {
+  const lines: ChangedLine[] = [];
+  for (const line of diff.split("\n")) {
+    const match = line.match(/^([+-])\s*(\d+)\s(.*)$/);
+    if (!match) continue;
+    lines.push({
+      lineNumber: Number(match[2]),
+      content: match[3] ?? "",
+      kind: match[1] === "-" ? "removed" : "added",
+    });
+  }
+
+  for (let index = 0; index < lines.length; ) {
+    if (lines[index]?.kind !== "removed") {
+      index += 1;
+      continue;
+    }
+    const removedStart = index;
+    while (lines[index]?.kind === "removed") index += 1;
+    const addedStart = index;
+    while (lines[index]?.kind === "added") index += 1;
+    const pairCount = Math.min(addedStart - removedStart, index - addedStart);
+    for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+      const removed = lines[removedStart + pairIndex]!;
+      const added = lines[addedStart + pairIndex]!;
+      removed.focusColumn = changedColumn(removed.content, added.content);
+      added.focusColumn = changedColumn(added.content, removed.content);
+    }
+  }
+  return lines;
+}
+
+function visibleChangedLines(
+  lines: readonly ChangedLine[],
+  expanded: boolean,
+): { lines: ChangedLine[]; omittedLines: number } {
+  if (expanded) return { lines: [...lines], omittedLines: 0 };
+  let added = 0;
+  let removed = 0;
+  const visibleLines = lines.filter((line) => {
+    if (line.kind === "added") {
+      added += 1;
+      return added <= COLLAPSED_BLOCK_LINES;
+    }
+    removed += 1;
+    return removed <= COLLAPSED_BLOCK_LINES;
+  });
+  return { lines: visibleLines, omittedLines: lines.length - visibleLines.length };
+}
+
+function renderChangedLines(
+  lines: readonly ChangedLine[],
   filePath: string,
   expanded: boolean,
-  background: "toolErrorBg" | "toolSuccessBg",
   theme: Theme,
   width: number,
+  showLineNumbers: boolean,
 ): string[] {
-  const { lines, omittedLines } = visibleBlockLines(text, expanded);
+  const { lines: visibleLines, omittedLines } = visibleChangedLines(lines, expanded);
   const codeWidth = Math.max(1, width - 2);
-  const rendered = lines.length
-    ? lines.flatMap((line) =>
-        layoutCodeLine(line, filePath, expanded, codeWidth).map((segment) =>
-          theme.bg(background, ` ${segment || " "} `),
-        ),
-      )
-    : [theme.bg(background, ` ${theme.fg("muted", "(empty)")} `)];
+  const rendered = visibleLines.flatMap((line) => {
+    const prefix = showLineNumbers ? `${line.lineNumber} ` : "";
+    const availableCodeWidth = Math.max(1, codeWidth - prefix.length);
+    const background = line.kind === "removed" ? "toolErrorBg" : "toolSuccessBg";
+    return layoutCodeLine(
+      line.content,
+      filePath,
+      expanded,
+      availableCodeWidth,
+      line.focusColumn,
+    ).map((segment) => theme.bg(background, ` ${prefix}${segment || " "} `));
+  });
   if (omittedLines > 0) {
     rendered.push(
       theme.fg("muted", ` … ${omittedLines} more line${omittedLines === 1 ? "" : "s"}`),
@@ -228,13 +351,21 @@ function renderCodeBlock(
   return rendered;
 }
 
+function formatLineRange(range: { startLine: number; endLine: number }): string {
+  return range.startLine === range.endLine
+    ? `line ${range.startLine}`
+    : `lines ${range.startLine}–${range.endLine}`;
+}
+
 function renderMultiEditInputLines(
   input: unknown,
   expanded: boolean,
   theme: Theme,
   width: number,
+  editRanges: readonly MultiEditEditRanges[] = [],
 ): string[] {
   const files = mergeFileInputs(normalizeRenderableFiles(input));
+  const rangesByPath = new Map(editRanges.map((entry) => [entry.path, entry.ranges]));
   const output = [
     `${theme.fg("toolTitle", theme.bold(TOOL_NAME))} ${theme.fg(
       "muted",
@@ -244,16 +375,16 @@ function renderMultiEditInputLines(
 
   for (const file of files) {
     output.push("", theme.fg("toolOutput", file.path));
+    const fileRanges = rangesByPath.get(file.path) ?? [];
     for (const [index, edit] of file.edits.entries()) {
-      if (file.edits.length > 1) {
-        output.push(theme.fg("muted", `block ${index + 1}`));
+      const range = fileRanges[index];
+      if (range) output.push(theme.fg("muted", formatLineRange(range)));
+      const changedLines = parseChangedLines(changedOnlyDiff(edit.oldText, edit.newText));
+      if (changedLines.length) {
+        output.push(...renderChangedLines(changedLines, file.path, expanded, theme, width, false));
+      } else {
+        output.push(theme.fg("muted", "(no changes)"));
       }
-      output.push(
-        ...renderCodeBlock(edit.oldText, file.path, expanded, "toolErrorBg", theme, width),
-      );
-      output.push(
-        ...renderCodeBlock(edit.newText, file.path, expanded, "toolSuccessBg", theme, width),
-      );
     }
   }
 
@@ -265,16 +396,23 @@ export function renderMultiEditInput(
   expanded: boolean,
   theme: Theme,
   width = Number.MAX_SAFE_INTEGER,
+  editRanges: readonly MultiEditEditRanges[] = [],
 ): string {
-  return renderMultiEditInputLines(input, expanded, theme, width).join("\n");
+  return renderMultiEditInputLines(input, expanded, theme, width, editRanges).join("\n");
 }
 
 class MultiEditInputComponent implements Component {
+  private editRanges: readonly MultiEditEditRanges[] = [];
+
   constructor(
     private readonly input: unknown,
     private readonly expanded: boolean,
     private readonly theme: Theme,
   ) {}
+
+  setEditRanges(editRanges: readonly MultiEditEditRanges[]): void {
+    this.editRanges = editRanges;
+  }
 
   invalidate(): void {}
 
@@ -287,11 +425,42 @@ class MultiEditInputComponent implements Component {
       this.expanded,
       this.theme,
       contentWidth,
+      this.editRanges,
     ).map((line) => {
       const fitted = truncateToWidth(line, contentWidth, "");
       return `${margin}${fitted}${" ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)))}${margin}`;
     });
     return [" ".repeat(width), ...content, " ".repeat(width)];
+  }
+}
+
+export function renderFinalDiffs(
+  diffs: readonly MultiEditDiff[],
+  expanded: boolean,
+  theme: Theme,
+  width = Number.MAX_SAFE_INTEGER,
+): string {
+  const output: string[] = [];
+  for (const { path: filePath, diff } of diffs) {
+    const changedLines = parseChangedLines(diff);
+    if (!changedLines.length) continue;
+    output.push(theme.fg("toolOutput", filePath));
+    output.push(...renderChangedLines(changedLines, filePath, expanded, theme, width, true));
+  }
+  return output.join("\n");
+}
+
+class FinalDiffComponent implements Component {
+  constructor(
+    private readonly diffs: readonly MultiEditDiff[],
+    private readonly expanded: boolean,
+    private readonly theme: Theme,
+  ) {}
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    return renderFinalDiffs(this.diffs, this.expanded, this.theme, width).split("\n");
   }
 }
 
@@ -329,15 +498,20 @@ export function renderLineCounts(lineCounts: readonly MultiEditLineCount[], them
     .join("\n");
 }
 
-async function applyMultiEdit(root: string, input: MultiEditInput): Promise<MultiEditDetails> {
+async function applyMultiEdit(
+  root: string,
+  projectRoot: string,
+  input: MultiEditInput,
+  mode: AccessMode,
+): Promise<AppliedMultiEdit> {
   const changedFiles: string[] = [];
-  const lineCounts: MultiEditLineCount[] = [];
+  const originals: AppliedMultiEdit["originals"] = [];
+  const editRanges: MultiEditEditRanges[] = [];
   for (const file of mergeFileInputs(input.files)) {
-    const absolutePath = resolveInsideRoot(root, file.path);
-    if (absolutePath === null) throw new Error(`Path is outside the project root: ${file.path}`);
-
+    const absolutePath = await resolveEditablePath(root, projectRoot, file.path, mode);
     const original = await readFile(absolutePath, "utf8");
     const replacements: Replacement[] = [];
+    const ranges: MultiEditEditRanges["ranges"] = [];
     for (const edit of file.edits) {
       if (!edit.oldText) throw new Error(`oldText cannot be empty for ${file.path}.`);
       const matches = countOccurrences(original, edit.oldText);
@@ -347,6 +521,11 @@ async function applyMultiEdit(root: string, input: MultiEditInput): Promise<Mult
         );
       }
       const start = matches[0]!;
+      const startLine = original.slice(0, start).split("\n").length;
+      ranges.push({
+        startLine,
+        endLine: startLine + Math.max(1, sourceLines(edit.oldText).length) - 1,
+      });
       replacements.push({
         oldText: edit.oldText,
         newText: edit.newText,
@@ -356,15 +535,38 @@ async function applyMultiEdit(root: string, input: MultiEditInput): Promise<Mult
     }
 
     assertNoOverlaps(file.path, replacements);
+    editRanges.push({ path: file.path, ranges });
     const updated = applyReplacements(original, replacements);
     if (updated !== original) {
       await mkdir(path.dirname(absolutePath), { recursive: true });
       await writeFile(absolutePath, updated, "utf8");
       changedFiles.push(file.path);
-      lineCounts.push({ path: file.path, ...countChangedLines(original, updated) });
+      originals.push({ path: file.path, content: original });
     }
   }
-  return { changedFiles, lineCounts };
+  return { changedFiles, originals, editRanges };
+}
+
+async function finalizeMultiEdit(
+  root: string,
+  projectRoot: string,
+  applied: AppliedMultiEdit,
+  mode: AccessMode,
+): Promise<MultiEditDetails> {
+  const lineCounts: MultiEditLineCount[] = [];
+  const diffs: MultiEditDiff[] = [];
+  for (const original of applied.originals) {
+    const absolutePath = await resolveEditablePath(root, projectRoot, original.path, mode);
+    const formatted = await readFile(absolutePath, "utf8");
+    lineCounts.push({ path: original.path, ...countChangedLines(original.content, formatted) });
+    diffs.push({ path: original.path, diff: changedOnlyDiff(original.content, formatted) });
+  }
+  return {
+    changedFiles: applied.changedFiles,
+    lineCounts,
+    diffs,
+    editRanges: applied.editRanges,
+  };
 }
 
 async function awaitPostEditValidation(
@@ -386,10 +588,7 @@ async function awaitPostEditValidation(
   await Promise.all(validations);
 }
 
-export default function multiEdit(pi: ExtensionAPI): void {
-  let previousToolCallWasEdit = false;
-  const consecutiveEditCallIds = new Set<string>();
-
+function registerMultiEditTool(pi: ExtensionAPI): void {
   pi.registerTool<typeof multiEditSchema, MultiEditDetails>({
     name: TOOL_NAME,
     label: "Multi Edit",
@@ -403,8 +602,17 @@ export default function multiEdit(pi: ExtensionAPI): void {
     executionMode: "sequential",
     renderShell: "self",
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      const details = await applyMultiEdit(ctx.cwd, params);
-      await awaitPostEditValidation(pi, toolCallId, details, ctx);
+      const mode = getAccessMode();
+      if (!canWrite(mode)) throw new Error(MULTI_EDIT_ACCESS_ERROR);
+      const projectRoot = getAccessProjectRoot(ctx.cwd);
+      const applied = await applyMultiEdit(ctx.cwd, projectRoot, params, mode);
+      await awaitPostEditValidation(
+        pi,
+        toolCallId,
+        { changedFiles: applied.changedFiles, lineCounts: [], diffs: [], editRanges: [] },
+        ctx,
+      );
+      const details = await finalizeMultiEdit(ctx.cwd, projectRoot, applied, mode);
       return {
         content: [
           {
@@ -416,9 +624,11 @@ export default function multiEdit(pi: ExtensionAPI): void {
       };
     },
     renderCall(params, theme, context) {
-      return new MultiEditInputComponent(params, context.expanded, theme);
+      const component = new MultiEditInputComponent(params, context.expanded, theme);
+      context.state.callComponent = component;
+      return component;
     },
-    renderResult(result, _options, theme, context) {
+    renderResult(result, options, theme, context) {
       const output = new Container();
       output.addChild(new Spacer(1));
       if (context.isError) {
@@ -429,7 +639,17 @@ export default function multiEdit(pi: ExtensionAPI): void {
         output.addChild(new Text(theme.fg("error", error), 1, 0));
         return output;
       }
-      const lineCounts = result.details?.lineCounts ?? [];
+      const details = result.details;
+      const callComponent = context.state.callComponent;
+      if (callComponent instanceof MultiEditInputComponent && details?.editRanges) {
+        callComponent.setEditRanges(details.editRanges);
+      }
+      const lineCounts = details?.lineCounts ?? [];
+      const diffs = details?.diffs ?? [];
+      if (diffs.some(({ diff }) => diff.length > 0)) {
+        output.addChild(new FinalDiffComponent(diffs, options.expanded, theme));
+        output.addChild(new Spacer(1));
+      }
       output.addChild(
         new Text(
           lineCounts.length
@@ -442,21 +662,49 @@ export default function multiEdit(pi: ExtensionAPI): void {
       return output;
     },
   });
+}
+
+export default function multiEdit(pi: ExtensionAPI): void {
+  let previousToolCallWasEdit = false;
+  let sessionActive = false;
+  const consecutiveEditCallIds = new Set<string>();
+
+  function syncActiveEditTools(): void {
+    const writeAllowed = canWrite();
+    const activeTools = pi
+      .getActiveTools()
+      .filter(
+        (toolName) => toolName !== DISABLED_TOOL_NAME && (writeAllowed || toolName !== TOOL_NAME),
+      );
+    if (writeAllowed && !activeTools.includes(TOOL_NAME)) activeTools.push(TOOL_NAME);
+    pi.setActiveTools(activeTools);
+  }
+
+  let unsubscribe: (() => void) | undefined;
+  registerMultiEditTool(pi);
 
   pi.on("session_start", () => {
+    unsubscribe?.();
+    unsubscribe = subscribeToAccessMode(() => {
+      if (sessionActive) syncActiveEditTools();
+    });
     previousToolCallWasEdit = false;
+    sessionActive = true;
     consecutiveEditCallIds.clear();
-    const activeTools = pi.getActiveTools().filter((toolName) => toolName !== DISABLED_TOOL_NAME);
-    if (!activeTools.includes(TOOL_NAME)) activeTools.push(TOOL_NAME);
-    pi.setActiveTools(activeTools);
+    syncActiveEditTools();
   });
 
   pi.on("tool_call", (event) => {
-    const isEditCall = event.toolName === TOOL_NAME || event.toolName === DISABLED_TOOL_NAME;
+    if (event.toolName === DISABLED_TOOL_NAME) {
+      return { block: true, reason: "The edit tool is disabled. Use multi-edit instead." };
+    }
+    if (event.toolName === TOOL_NAME && !canWrite()) {
+      return { block: true, reason: MULTI_EDIT_ACCESS_ERROR };
+    }
+
+    const isEditCall = event.toolName === TOOL_NAME;
     if (isEditCall && previousToolCallWasEdit) consecutiveEditCallIds.add(event.toolCallId);
     previousToolCallWasEdit = isEditCall;
-    if (event.toolName !== DISABLED_TOOL_NAME) return;
-    return { block: true, reason: "The edit tool is disabled. Use multi-edit instead." };
   });
 
   pi.on("tool_result", (event) => {
@@ -464,5 +712,11 @@ export default function multiEdit(pi: ExtensionAPI): void {
     return {
       content: [...event.content, { type: "text" as const, text: CONSECUTIVE_EDIT_REMINDER }],
     };
+  });
+
+  pi.on("session_shutdown", () => {
+    sessionActive = false;
+    unsubscribe?.();
+    unsubscribe = undefined;
   });
 }

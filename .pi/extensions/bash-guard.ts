@@ -5,12 +5,23 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
+import { PROJECT_PATH_ERROR, projectPathIsAllowed } from "./access-mode/path-policy";
+import { isBashActionAllowed } from "./access-mode/tool-policy";
+import {
+  canAccessHostPaths,
+  canExecute,
+  getAccessMode,
+  getAccessProjectRoot,
+  type AccessMode,
+} from "./access-mode/state";
+
 type ToolResultPatch = {
   content?: ToolResultEvent["content"];
   details?: ToolResultEvent["details"];
   isError?: boolean;
 };
 
+const BASH_ACCESS_ERROR = "The current access mode blocks Bash execution.";
 const WORKDIR_ERROR =
   "work only in the current dir, never use `cd ..`, `cd /`, `git -C`, or other directory-changing tricks";
 const PYTHON_ERROR = "never use ad hoc python: use jq to parse json, use bun to run js";
@@ -20,10 +31,17 @@ const EXIT_CODE_ONE = "Exit code: 1";
 const EXIT_CODE_UNKNOWN = "Exit code: unknown";
 const RG_REPLACEMENT_PREFIX = "using rg instead";
 const UNSUPPORTED_FIND_REWRITE_ERROR = "find command uses unsupported arguments for rg rewrite";
+const FIND_RG_GUIDANCE =
+  "Use `rg --files [path]` directly (`-type f` is implicit). Map `-name` or `-path` to `-g '<glob>'`, pruning/exclusion to `-g '!<glob>'`, and `-maxdepth` to `--max-depth <n>`. " +
+  "Example: `rg --files --hidden --no-ignore . -g '*.ts' -g '!node_modules/**'`. Do not retry the `find` command.";
 
-interface RuleViolation {
-  rule: "workdir" | "python" | "dev-server";
+export interface RuleViolation {
+  rule: "access-mode" | "workdir" | "python" | "dev-server";
   detail: string;
+}
+
+export interface BashAnalysisOptions {
+  requireExecute?: boolean;
 }
 
 interface ShellToken {
@@ -131,17 +149,6 @@ function shellTokenize(command: string): ShellToken[] {
       continue;
     }
 
-    if (/\s/.test(char)) {
-      pushCurrent();
-      continue;
-    }
-
-    if (char === "#" && !current) {
-      while (index < command.length && command[index] !== "\n") index += 1;
-      index -= 1;
-      continue;
-    }
-
     if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
       pushCurrent();
       tokens.push({ text: `${char}${next}`, quoted: false });
@@ -152,6 +159,17 @@ function shellTokenize(command: string): ShellToken[] {
     if (shellOperators.has(char)) {
       pushCurrent();
       tokens.push({ text: char, quoted: false });
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      pushCurrent();
+      continue;
+    }
+
+    if (char === "#" && !current) {
+      while (index < command.length && command[index] !== "\n") index += 1;
+      index -= 1;
       continue;
     }
 
@@ -242,7 +260,9 @@ function rewriteGrepWords(words: string[]): string[] {
 }
 
 function unsupportedFindArgument(argument: string): never {
-  throw new SearchRewriteError(`${UNSUPPORTED_FIND_REWRITE_ERROR}: ${argument}`);
+  throw new SearchRewriteError(
+    `${UNSUPPORTED_FIND_REWRITE_ERROR}: ${argument}\n${FIND_RG_GUIDANCE}`,
+  );
 }
 
 function requiredFindArgument(words: string[], index: number): string {
@@ -270,8 +290,11 @@ function pushFindGlob(rewritten: string[], predicate: string, pattern: string, n
   rewritten.push(caseInsensitive ? "--iglob" : "-g", negated ? `!${glob}` : glob);
 }
 
-function rewriteFindWords(words: string[]): string[] {
-  const rewritten = ["rg", "--files", "--hidden", "--no-ignore"];
+function parseFindRoots(words: string[]): {
+  roots: string[];
+  followsSymlinks: boolean;
+  index: number;
+} {
   const roots: string[] = [];
   let followsSymlinks = false;
   let index = 1;
@@ -292,8 +315,16 @@ function rewriteFindWords(words: string[]): string[] {
     index += 1;
   }
 
-  if (followsSymlinks) rewritten.push("--follow");
-  rewritten.push(...(roots.length > 0 ? roots : ["."]));
+  return { roots, followsSymlinks, index };
+}
+
+function rewriteFindWords(words: string[]): string[] {
+  const rewritten = ["rg", "--files", "--hidden", "--no-ignore"];
+  const parsed = parseFindRoots(words);
+  let index = parsed.index;
+
+  if (parsed.followsSymlinks) rewritten.push("--follow");
+  rewritten.push(...(parsed.roots.length > 0 ? parsed.roots : ["."]));
 
   while (index < words.length) {
     const word = words[index] ?? "";
@@ -641,13 +672,60 @@ function hasUnsafePathUsage(tokens: ShellToken[]): boolean {
   });
 }
 
-export function analyzeBashCommand(command: string): RuleViolation | null {
-  const tokens = shellTokenize(command);
+function bashPathCandidates(command: string): string[] {
+  const candidates = new Set<string>();
+  for (const words of commandSegments(shellTokenize(command))) {
+    const commandWords = stripLeadingAssignments(words);
+    for (let index = 1; index < commandWords.length; index += 1) {
+      const word = commandWords[index] ?? "";
+      if (
+        !word ||
+        word === "--" ||
+        word.startsWith("-") ||
+        /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(word) ||
+        isGhApiEndpoint(commandWords, index)
+      )
+        continue;
+      candidates.add(word);
+    }
+  }
+  for (const match of command.matchAll(/[<>]{1,2}\s*([^\s;&|]+)/g)) {
+    const target = match[1]?.replace(/^['"]|['"]$/g, "");
+    if (target && target !== "&1" && target !== "&2") candidates.add(target);
+  }
+  return [...candidates];
+}
 
+async function canonicalPathViolation(
+  command: string,
+  root: string,
+  mode: AccessMode,
+): Promise<string | null> {
+  for (const candidate of bashPathCandidates(command))
+    if (!(await projectPathIsAllowed(root, candidate, mode))) return candidate;
+  return null;
+}
+
+function canonicalPathViolationError(candidate: string): string {
+  return `${PROJECT_PATH_ERROR}
+Rejected Bash path: ${JSON.stringify(candidate)}. The path may be outside the project lexically or resolve there through a symlink.
+The command was not run. Use a path whose resolved target is inside the project, or ask the user to switch to access mode 4. Do not retry the same path through another command or script.`;
+}
+
+export function analyzeBashCommand(
+  command: string,
+  mode: AccessMode = getAccessMode(),
+  options: BashAnalysisOptions = {},
+): RuleViolation | null {
+  if ((options.requireExecute ?? true) && !canExecute(mode))
+    return { rule: "access-mode", detail: BASH_ACCESS_ERROR };
+
+  const tokens = shellTokenize(command);
   if (
-    hasRawDirectoryTrick(command) ||
-    hasDirectoryFlagViolation(tokens) ||
-    hasUnsafePathUsage(tokens)
+    !canAccessHostPaths(mode) &&
+    (hasRawDirectoryTrick(command) ||
+      hasDirectoryFlagViolation(tokens) ||
+      hasUnsafePathUsage(tokens))
   ) {
     return { rule: "workdir", detail: WORKDIR_ERROR };
   }
@@ -715,20 +793,32 @@ function patchBashResultContent(event: ToolResultEvent): ToolResultPatch | undef
 }
 
 export default function bashGuard(pi: ExtensionAPI) {
-  pi.on("tool_call", (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (!isToolCallEventType("bash", event)) return;
 
     try {
+      const mode = getAccessMode();
+      const action = (event.input as { action?: unknown }).action;
+      if (!isBashActionAllowed(action, mode)) return block(BASH_ACCESS_ERROR);
+
       const replacement = replaceSearchCommand(event.input.command);
       if (replacement) {
         event.input.command = replacement.command;
         rgReplacementByToolCallId.set(event.toolCallId, replacement.command);
       }
 
-      const violation = analyzeBashCommand(event.input.command);
-      if (!violation) return;
-      rgReplacementByToolCallId.delete(event.toolCallId);
-      return block(violation.detail);
+      const violation = analyzeBashCommand(event.input.command, mode, { requireExecute: false });
+      if (violation) {
+        rgReplacementByToolCallId.delete(event.toolCallId);
+        return block(violation.detail);
+      }
+      const projectRoot = getAccessProjectRoot(ctx.cwd);
+      const rejectedPath = await canonicalPathViolation(event.input.command, projectRoot, mode);
+      if (rejectedPath) {
+        rgReplacementByToolCallId.delete(event.toolCallId);
+        return block(canonicalPathViolationError(rejectedPath));
+      }
+      return undefined;
     } catch (error) {
       rgReplacementByToolCallId.delete(event.toolCallId);
       if (error instanceof SearchRewriteError) return block(error.message);

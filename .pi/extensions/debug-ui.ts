@@ -9,6 +9,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { assertProjectPath } from "./access-mode/path-policy";
+import { canExecute, getAccessProjectRoot } from "./access-mode/state";
 
 const STATUS_KEY = "debug-ui";
 const DEFAULT_URL = "/en/payroll";
@@ -89,11 +91,17 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function allowedAppRoot(cwd: string, appRoot: string): Promise<string> {
+  await assertProjectPath(getAccessProjectRoot(cwd), appRoot);
+  return appRoot;
+}
+
 async function resolveAppRoot(cwd: string): Promise<string> {
   const override = process.env.PI_DEBUG_UI_APP_ROOT?.trim();
-  if (override) return path.resolve(cwd, override);
+  if (override) return allowedAppRoot(cwd, path.resolve(cwd, override));
   const nestedApp = path.join(cwd, "app");
-  return (await pathExists(path.join(nestedApp, "package.json"))) ? nestedApp : cwd;
+  const appRoot = (await pathExists(path.join(nestedApp, "package.json"))) ? nestedApp : cwd;
+  return allowedAppRoot(cwd, appRoot);
 }
 
 function unquoteEnvValue(value: string): string {
@@ -207,7 +215,9 @@ async function runDirectorCode(
   signal?: AbortSignal,
 ): Promise<string> {
   const appRoot =
-    activeSession?.id === sessionId ? activeSession.appRoot : await resolveAppRoot(ctx.cwd);
+    activeSession?.id === sessionId
+      ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
+      : await resolveAppRoot(ctx.cwd);
   const result = await runBunScript(
     pi,
     ctx,
@@ -451,7 +461,9 @@ function registerCloseTool(pi: ExtensionAPI): void {
       const sessionId = params.sessionId ?? activeSession?.id;
       if (!sessionId) throw new Error("No active debug UI session to close.");
       const appRoot =
-        activeSession?.id === sessionId ? activeSession.appRoot : await resolveAppRoot(ctx.cwd);
+        activeSession?.id === sessionId
+          ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
+          : await resolveAppRoot(ctx.cwd);
       const output = await closeDirectorSession(pi, ctx, appRoot, sessionId, signal);
       debugUiMode = false;
       return { content: [{ type: "text" as const, text: output }], details: { sessionId } };
@@ -497,7 +509,9 @@ async function handleCloseCommand(
     return true;
   }
   const appRoot =
-    activeSession?.id === sessionId ? activeSession.appRoot : await resolveAppRoot(ctx.cwd);
+    activeSession?.id === sessionId
+      ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
+      : await resolveAppRoot(ctx.cwd);
   await closeDirectorSession(pi, ctx, appRoot, sessionId, ctx.signal);
   debugUiMode = false;
   ctx.ui.notify(`Closed debug UI session ${sessionId}.`, "info");
@@ -551,8 +565,9 @@ function registerDebugUiCommand(pi: ExtensionAPI): void {
     async handler(args, ctx) {
       const command = args.trim();
       try {
-        if (await handleCloseCommand(pi, ctx, command)) return;
         if (handleStatusCommand(ctx, command)) return;
+        if (!canExecute()) throw new Error("Debug UI requires access mode 3 or 4.");
+        if (await handleCloseCommand(pi, ctx, command)) return;
         if (await handleKillCommand(pi, ctx, command)) return;
         await handleOpenCommand(pi, ctx, command);
       } catch (error) {

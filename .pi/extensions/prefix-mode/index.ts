@@ -1,9 +1,21 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 
+import {
+  accessModeStatus,
+  getAccessMode,
+  nextAccessMode,
+  previousAccessMode,
+  setAccessMode,
+  type AccessMode,
+} from "../access-mode/state";
 import { PREFIX_MODE_INPUT_EVENT, type PrefixModeInputRequest } from "./events";
 import { MessageScroller } from "./message-scroll";
-import { PrefixSequence, type PrefixNavigationAction } from "./prefix-sequence";
+import {
+  PrefixSequence,
+  type PrefixAccessModeAction,
+  type PrefixNavigationAction,
+} from "./prefix-sequence";
 import { openSessionSearch } from "./session-search";
 import {
   PREFIX_STATUS_KEY,
@@ -12,7 +24,16 @@ import {
   type PrefixHelpGroup,
 } from "./registry";
 
-const PREFIX_HELP_GROUPS: readonly PrefixHelpGroup[] = [
+export const prefixHelpGroups = (): readonly PrefixHelpGroup[] => [
+  {
+    label: "Access",
+    options: [
+      "Tab next",
+      "Shift+Tab previous",
+      "1-4 then Tab select",
+      `Selected ${accessModeStatus()}`,
+    ],
+  },
   {
     label: "Messages",
     options: ["[count]j/k move", "gg first", "[count]g #", "G bottom", "[count]G # from end"],
@@ -47,6 +68,25 @@ const printableCharacter = (data: string): string | undefined => {
   return data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined;
 };
 
+export const accessModeTabDirection = (data: string): -1 | 1 | undefined => {
+  if (matchesKey(data, Key.shift("tab"))) return -1;
+  if (matchesKey(data, Key.tab)) return 1;
+  return undefined;
+};
+
+export const targetAccessMode = (
+  action: PrefixAccessModeAction,
+  currentMode: AccessMode = getAccessMode(),
+): AccessMode => {
+  if (action.kind === "select") return action.mode;
+  return action.direction === 1 ? nextAccessMode(currentMode) : previousAccessMode(currentMode);
+};
+
+const runAccessMode = (action: PrefixAccessModeAction): void => {
+  messageScroller.close();
+  setAccessMode(targetAccessMode(action));
+};
+
 const runNavigation = (action: PrefixNavigationAction): void => {
   switch (action.kind) {
     case "relative":
@@ -78,13 +118,13 @@ export default function prefixMode(pi: ExtensionAPI): void {
   };
 
   const showPrefix = (ctx: ExtensionContext) => {
-    ctx.ui.setStatus(PREFIX_STATUS_KEY, prefixCommandRegistry.footerText(PREFIX_HELP_GROUPS));
+    ctx.ui.setStatus(PREFIX_STATUS_KEY, prefixCommandRegistry.footerText(prefixHelpGroups()));
   };
 
   const showPendingPrefix = (ctx: ExtensionContext) => {
     ctx.ui.setStatus(
       PREFIX_STATUS_KEY,
-      prefixCommandRegistry.footerText(PREFIX_HELP_GROUPS, prefixSequence.display),
+      prefixCommandRegistry.footerText(prefixHelpGroups(), prefixSequence.display),
     );
   };
 
@@ -92,7 +132,7 @@ export default function prefixMode(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     unsubscribeTerminalInput?.();
     messageScroller.attach(ctx);
-    prefixActive = false;
+    clearPrefix(ctx);
     const activatePrefix = () => {
       prefixActive = true;
       prefixSequence.reset();
@@ -113,12 +153,20 @@ export default function prefixMode(pi: ExtensionAPI): void {
         clearPrefix(ctx);
         return true;
       }
-      const result = prefixSequence.feed(printableCharacter(data));
+      const tabDirection = accessModeTabDirection(data);
+      const result =
+        tabDirection === undefined
+          ? prefixSequence.feed(printableCharacter(data))
+          : prefixSequence.feedAccessModeTab(tabDirection);
       if (result.kind === "pending") {
         showPendingPrefix(ctx);
         return true;
       }
       clearPrefix(ctx);
+      if (result.kind === "accessMode") {
+        runAccessMode(result.action);
+        return true;
+      }
       if (result.kind === "navigation") {
         runNavigation(result.action);
         return true;
@@ -146,7 +194,10 @@ export default function prefixMode(pi: ExtensionAPI): void {
     unsubscribeTerminalInput?.();
     unsubscribeTerminalInput = undefined;
     messageScroller.detach(ctx);
-    prefixActive = false;
-    if (ctx.hasUI) ctx.ui.setStatus(PREFIX_STATUS_KEY, undefined);
+    if (ctx.hasUI) clearPrefix(ctx);
+    else {
+      prefixActive = false;
+      prefixSequence.reset();
+    }
   });
 }

@@ -1,12 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { ACCESS_MODE_ENV, ACCESS_PROJECT_ROOT_ENV } from "../access-mode/state";
 import {
   agentPromptArgs,
+  assertSubagentExecuteAccess,
   missingSubagentActionResult,
   piArgsForSpec,
   renderSubagentCompletionMessage,
+  resolveSubagentCwd,
   shouldPlayMainAgentSound,
+  subagentAccessEnvironment,
 } from "./index";
 import {
   agentNameForSpec,
@@ -23,6 +29,8 @@ import {
   type SpawnedSubagentRecord,
 } from "./state";
 
+const temporaryPaths = new Set<string>();
+
 const record = (id: string, workspaceId = "w1"): SpawnedSubagentRecord => ({
   id,
   name: id,
@@ -36,6 +44,40 @@ const record = (id: string, workspaceId = "w1"): SpawnedSubagentRecord => ({
   outboxPath: "/tmp/outbox.jsonl",
   replaceSystemPrompt: false,
   createdAt: 1,
+});
+
+afterEach(async () => {
+  await Promise.all(
+    [...temporaryPaths].map((temporaryPath) => rm(temporaryPath, { recursive: true, force: true })),
+  );
+  temporaryPaths.clear();
+});
+
+describe("subagent access", () => {
+  test("requires execute mode and propagates the access environment", () => {
+    expect(() => assertSubagentExecuteAccess(1)).toThrow("requires execute mode");
+    expect(() => assertSubagentExecuteAccess(2)).toThrow("requires execute mode");
+    expect(() => assertSubagentExecuteAccess(3)).not.toThrow();
+    expect(() => assertSubagentExecuteAccess(4)).not.toThrow();
+    expect(subagentAccessEnvironment(3, "/project")).toEqual({
+      [ACCESS_MODE_ENV]: "3",
+      [ACCESS_PROJECT_ROOT_ENV]: "/project",
+    });
+  });
+
+  test("confines cwd to the inherited project root until mode 4", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "subagent-project-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "subagent-outside-"));
+    temporaryPaths.add(root);
+    temporaryPaths.add(outside);
+
+    await expect(resolveSubagentCwd(root, ".", 3, root)).resolves.toBe(root);
+    for (const mode of [1, 2, 3] as const)
+      await expect(resolveSubagentCwd(root, outside, mode, root)).rejects.toThrow(
+        "only permits paths inside",
+      );
+    await expect(resolveSubagentCwd(root, outside, 4, root)).resolves.toBe(outside);
+  });
 });
 
 describe("agentPromptArgs", () => {
@@ -90,7 +132,13 @@ describe("piArgsForSpec", () => {
     ).toContain(promptPath);
   });
 
-  test("allows an absolute worktree cwd but rejects external skill files", () => {
+  test("retains the access guard when other extensions are disabled", () => {
+    const guardPath = path.resolve(import.meta.dir, "../access-mode/index.ts");
+    expect(piArgsForSpec({ noExtensions: true }, "/repo", undefined, 3)).toContain(guardPath);
+    expect(piArgsForSpec({ noExtensions: true }, "/repo", undefined, 4)).not.toContain(guardPath);
+  });
+
+  test("keeps cwd out of Pi args but rejects external skill files", () => {
     expect(() =>
       piArgsForSpec({ cwd: "/repo-worktree", skills: ["../secret.md"] }, "/repo"),
     ).toThrow("Subagent skill must stay inside /repo: ../secret.md");

@@ -11,7 +11,7 @@ The database is a reuse cache, not a substitute for the live filesystem. Every t
 
 ## Root handling
 
-The default root is `app/wt/main` when that is a valid directory inside the current working directory, otherwise it is the current working directory. An explicit root may be relative or absolute, but it must exist, be readable, be a directory, and remain inside the canonical current working directory after symlinks are resolved. Persisted entries are isolated by canonical current working directory and canonical project root, so reconciling one root does not reuse, delete, or otherwise mutate another root's cached index.
+The default root is `app/wt/main` when that is a valid directory inside the current working directory, otherwise it is the current working directory. An explicit root may be relative or absolute and must exist, be readable, and be a directory. In access modes 1–3 it must remain inside the inherited project root after symlinks are resolved; mode 4 permits host roots. Persisted entries are isolated by canonical current working directory and canonical project root, so reconciling one root does not reuse, delete, or otherwise mutate another root's cached index.
 
 Traversal skips hidden entries other than `.github`, `.pi`, `.dockerignore`, `.env.example`, and `.gitignore`. It also skips `.git`, `.next`, `.turbo`, `.cache`, `coverage`, `dist`, `build`, `node_modules`, `.pi/tmp`, and `.pi/index`.
 

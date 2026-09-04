@@ -10,6 +10,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { DEFAULT_ACCESS_MODE, setAccessMode } from "../access-mode/state";
 import projectIndex from "../project-index/index";
 
 type ProjectIndexToolName =
@@ -34,6 +35,7 @@ function registerProjectIndexTools(): Map<string, ToolDefinition> {
 const tools = registerProjectIndexTools();
 
 afterEach(async () => {
+  setAccessMode(DEFAULT_ACCESS_MODE);
   await Promise.all(
     [...temporaryPaths].map((temporaryPath) => rm(temporaryPath, { recursive: true, force: true })),
   );
@@ -842,9 +844,16 @@ describe("project-index roots and public details", () => {
       throw error;
     }
 
+    setAccessMode(3);
     await expect(
       executeTool("project_index_search", { root: "linked-outside", query: "outside" }, root),
     ).rejects.toThrow();
+
+    setAccessMode(4);
+    const result = resultText(
+      await executeTool("project_index_search", { root: "linked-outside", query: "outside" }, root),
+    );
+    expect(result).toContain("outside.ts:");
   });
 
   test("keeps indexed text and absolute corpus records out of status and refresh details", async () => {

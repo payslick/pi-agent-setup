@@ -5,13 +5,18 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isEditToolResult, isWriteToolResult } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  canExecute,
+  getAccessMode,
+  subscribeToAccessMode,
+  type AccessMode,
+} from "./access-mode/state";
+import {
   POST_EDIT_VALIDATION_REQUEST_EVENT,
   type PostEditValidationRequest,
-} from "./post-edit-validation-events";
+} from "./post-edit-validation/events";
 
 export interface CommandResult {
   command: string;
@@ -23,14 +28,14 @@ export interface CommandResult {
 }
 
 export interface ValidationCommand {
-  lane: "format" | "check" | "typecheck" | "unit-tests";
+  lane: "unit-tests";
   label: string;
   executable: string;
   args: string[];
 }
 
 export interface ValidationIssue {
-  kind: "error" | "warning";
+  kind: "error";
   title: string;
   command: ValidationCommand;
   result: CommandResult;
@@ -52,10 +57,6 @@ interface DeferredValidationIssue {
   issue: ValidationIssue;
 }
 
-interface ValidationCommandOptions {
-  runUnitTests?: boolean;
-}
-
 const CHECKABLE_EXTENSIONS = new Set([
   ".cjs",
   ".cts",
@@ -66,24 +67,22 @@ const CHECKABLE_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
 ]);
-const TYPECHECKABLE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
 const EXIT_CODE_UNKNOWN = "unknown";
 const MULTI_EDIT_TOOL_NAME = "multi-edit";
-const PARENT_PATH_SEGMENT = "." + ".";
 const IGNORED_PATH_PREFIXES = [".pi/tmp/upstream/"];
 const STATUS_KEY = "post-edit-checks";
-const WARNING_RE = /\b(warnings?|deprecated|deprecation)\b/i;
 const VALIDATION_PROMPT_MARKER = "Post-edit validation discipline:";
 const POST_EDIT_VALIDATION_INSTRUCTIONS = `${VALIDATION_PROMPT_MARKER}
-- Multi-edit awaits configured format, check, typecheck, and unit-test scripts before returning; validation for other file-edit tools runs in the background.
-- Do not run manual format/check/typecheck/test commands just to validate a completed edit batch; passing and stale results stay hidden.
+- In access modes 3-4, multi-edit awaits \`bun run test\` before returning; validation for other file-edit tools runs in the background.
+- Access modes 1-2 skip post-edit tests and cancel queued or active validation runs.
+- Do not run \`bun run test\` manually just to validate a completed edit batch; passing and stale results stay hidden.
+- Only nonzero test exits are reported.
 - Run validation manually only when the user explicitly asks or you need a targeted diagnostic after a reported issue.
-- Validation issues are delivered privately first so you can fix them; only unresolved issues are shown after your run settles.
+- Validation failures are delivered privately first so you can fix them; only unresolved failures are shown after your run settles.
 - Validation reports are status notifications, not user requests. Never send an assistant response solely to acknowledge one.`;
 const DEFAULT_BATCH_DELAY_MS = numberFromEnv("PI_POST_EDIT_BATCH_DELAY_MS", 750);
 const DEFAULT_COMMAND_TIMEOUT_MS = numberFromEnv("PI_POST_EDIT_CHECK_TIMEOUT_MS", 120_000);
 const DEFAULT_MAX_OUTPUT_CHARS = numberFromEnv("PI_POST_EDIT_MAX_OUTPUT_CHARS", 6_000);
-const RUN_UNIT_TESTS = process.env.PI_POST_EDIT_RUN_TESTS !== "0";
 
 let editRevision = 0;
 let pendingTimer: NodeJS.Timeout | undefined;
@@ -104,21 +103,12 @@ function isCheckableFile(filePath: string): boolean {
   return CHECKABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-function isTypecheckableFile(filePath: string): boolean {
-  return TYPECHECKABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
 function isFileMutationToolName(toolName: string): boolean {
   return toolName === "edit" || toolName === "write" || toolName === MULTI_EDIT_TOOL_NAME;
 }
 
-function resolveAffectedFile(root: string, filePath: string): string | null {
-  const absolutePath = path.resolve(root, filePath);
-  const relativePath = path.relative(root, absolutePath);
-  const insideRoot =
-    relativePath === "" ||
-    (!relativePath.startsWith(PARENT_PATH_SEGMENT) && !path.isAbsolute(relativePath));
-  return insideRoot ? absolutePath : null;
+function resolveAffectedFile(root: string, filePath: string): string {
+  return path.resolve(root, filePath);
 }
 
 function normalizeRelativePath(value: string): string {
@@ -145,55 +135,21 @@ function formatCommand(executable: string, args: readonly string[]): string {
   return [executable, ...args].map(shellQuote).join(" ");
 }
 
-function scriptCommand(
-  lane: ValidationCommand["lane"],
-  label: string,
-  scriptName: string,
-  args: readonly string[] = [],
-): ValidationCommand {
-  return {
-    lane,
-    label,
-    executable: "bun",
-    args: ["run", scriptName, ...(args.length > 0 ? ["--", ...args] : [])],
-  };
-}
-
-export function selectUnitTestScript(scripts: Record<string, string>): string | undefined {
-  return ["test:unit", "unit", "test"].find((scriptName) => Boolean(scripts[scriptName]));
-}
-
-export function buildValidationCommands(
-  scripts: Record<string, string>,
-  files: readonly string[],
-  options: ValidationCommandOptions = {},
-): ValidationCommand[] {
-  const targets = [...new Set(files)].sort();
-  const commands: ValidationCommand[] = [];
-
-  if (scripts.format) commands.push(scriptCommand("format", "format", "format", targets));
-  if (scripts.check) commands.push(scriptCommand("check", "check", "check", targets));
-  if (scripts.typecheck && targets.some(isTypecheckableFile))
-    commands.push(scriptCommand("typecheck", "typecheck", "typecheck"));
-
-  const unitTestScript = selectUnitTestScript(scripts);
-  if ((options.runUnitTests ?? true) && unitTestScript)
-    commands.push(scriptCommand("unit-tests", "unit tests", unitTestScript));
-
-  return commands;
+export function buildValidationCommands(mode: AccessMode = getAccessMode()): ValidationCommand[] {
+  if (!canExecute(mode)) return [];
+  return [
+    {
+      lane: "unit-tests",
+      label: "unit tests",
+      executable: "bun",
+      args: ["run", "test"],
+    },
+  ];
 }
 
 export function appendPostEditValidationInstructions(systemPrompt: string): string {
   if (systemPrompt.includes(VALIDATION_PROMPT_MARKER)) return systemPrompt;
   return `${systemPrompt}\n\n${POST_EDIT_VALIDATION_INSTRUCTIONS}`;
-}
-
-export function validationCommandWaves(
-  commands: readonly ValidationCommand[],
-): ValidationCommand[][] {
-  const format = commands.filter((command) => command.lane === "format");
-  const checks = commands.filter((command) => command.lane !== "format");
-  return [format, checks].filter((wave) => wave.length > 0);
 }
 
 function clearPendingTimer(): void {
@@ -246,7 +202,7 @@ function resetValidationState(): void {
   clearPendingTimer();
   activeRun?.controller.abort();
   activeRun = undefined;
-  editRevision = 0;
+  editRevision += 1;
   activeEditToolCallIds.clear();
   awaitedMultiEditToolCallIds.clear();
   for (const timeout of activeEditFallbackTimers.values()) clearTimeout(timeout);
@@ -260,6 +216,17 @@ function terminateActiveRun(): void {
   activeRun?.controller.abort();
 }
 
+function cancelValidation(ctx: ExtensionContext): void {
+  clearPendingTimer();
+  terminateActiveRun();
+  activeRun = undefined;
+  editRevision += 1;
+  pendingFiles.clear();
+  deferredValidationIssues = [];
+  resolveEditQuiescenceWaiters();
+  setValidationStatus(ctx, undefined);
+}
+
 function setValidationStatus(ctx: ExtensionContext, text: string | undefined): void {
   if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, text);
 }
@@ -269,22 +236,6 @@ function schedulePendingBatch(pi: ExtensionAPI, ctx: ExtensionContext): void {
   clearPendingTimer();
   pendingTimer = setTimeout(() => void launchPendingBatch(pi, ctx), DEFAULT_BATCH_DELAY_MS);
   pendingTimer.unref?.();
-}
-
-async function packageScripts(root: string): Promise<Record<string, string>> {
-  try {
-    const parsed = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {
-      scripts?: Record<string, unknown>;
-    };
-    const scripts = parsed.scripts ?? {};
-    return Object.fromEntries(
-      Object.entries(scripts).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      ),
-    );
-  } catch {
-    return {};
-  }
 }
 
 function killAfterGrace(child: ReturnType<typeof spawn>): NodeJS.Timeout {
@@ -356,34 +307,17 @@ function runCommand(
   });
 }
 
-function isCleanWarningLine(line: string): boolean {
-  return /\b(?:0|no)\s+warnings?\b/i.test(line) || /^\s*\(pass\)\s/.test(line);
-}
-
-function lineHasWarning(line: string): boolean {
-  return WARNING_RE.test(line) && !isCleanWarningLine(line);
-}
-
-function textHasWarning(text: string): boolean {
-  return text.split(/\r?\n/).some(lineHasWarning);
-}
-
-function outputHasWarning(result: CommandResult): boolean {
-  return textHasWarning(result.stdout) || textHasWarning(result.stderr);
-}
-
 export function validationIssueForResult(
   command: ValidationCommand,
   result: CommandResult,
 ): ValidationIssue | null {
-  if (result.aborted) return null;
-  if (result.timedOut)
-    return { kind: "error", title: `${command.label} timed out`, command, result };
-  if (result.exitCode !== 0)
-    return { kind: "error", title: `${command.label} failed`, command, result };
-  if (outputHasWarning(result))
-    return { kind: "warning", title: `${command.label} warning`, command, result };
-  return null;
+  if (result.aborted || result.exitCode === null || result.exitCode === 0) return null;
+  return {
+    kind: "error",
+    title: result.timedOut ? `${command.label} timed out` : `${command.label} failed`,
+    command,
+    result,
+  };
 }
 
 function truncateOutput(text: string, maxChars = DEFAULT_MAX_OUTPUT_CHARS): string {
@@ -394,15 +328,8 @@ function truncateOutput(text: string, maxChars = DEFAULT_MAX_OUTPUT_CHARS): stri
   return `${value.slice(0, headLength)}\n… truncated ${value.length - maxChars} chars …\n${value.slice(-tailLength)}`;
 }
 
-function warningLines(text: string, maxLines = 30): string {
-  return text.split(/\r?\n/).filter(lineHasWarning).slice(0, maxLines).join("\n").trim();
-}
-
-function outputSection(label: "stdout" | "stderr", text: string, issue: ValidationIssue): string {
-  const excerpt =
-    issue.kind === "warning" && issue.result.exitCode === 0
-      ? warningLines(text) || truncateOutput(text)
-      : truncateOutput(text);
+function outputSection(label: "stdout" | "stderr", text: string): string {
+  const excerpt = truncateOutput(text);
   return excerpt ? `${label}:\n${excerpt}` : "";
 }
 
@@ -411,8 +338,8 @@ function commandOutput(issue: ValidationIssue): string {
   const parts = [
     `$ ${result.command}`,
     `Exit code: ${result.exitCode ?? EXIT_CODE_UNKNOWN}${result.timedOut ? " (timed out)" : ""}`,
-    outputSection("stdout", result.stdout, issue),
-    outputSection("stderr", result.stderr, issue),
+    outputSection("stdout", result.stdout),
+    outputSection("stderr", result.stderr),
   ].filter(Boolean);
   return parts.join("\n");
 }
@@ -427,10 +354,8 @@ export function formatValidationIssueOutput(
   files: readonly string[],
   issue: ValidationIssue,
 ): string {
-  const prefix =
-    issue.kind === "warning" ? "Post-edit validation warning" : "Post-edit validation failed";
   return [
-    `${prefix}: ${issue.title}.`,
+    `Post-edit validation failed: ${issue.title}.`,
     files.length > 0 ? `Files: ${formatFileList(files)}` : "",
     "",
     commandOutput(issue),
@@ -466,7 +391,7 @@ function reportIssue(
   batch: ValidationBatch,
   issue: ValidationIssue,
 ): void {
-  setValidationStatus(ctx, issue.kind === "warning" ? "checks:warning" : "checks:failed");
+  setValidationStatus(ctx, "checks:failed");
   deferredValidationIssues.push({ batch, issue });
   pi.sendMessage(validationMessage(batch, issue, false), { triggerTurn: true });
 }
@@ -475,22 +400,6 @@ function reportDeferredIssues(pi: ExtensionAPI): void {
   const issues = deferredValidationIssues.filter(({ batch }) => batch.revision === editRevision);
   deferredValidationIssues = [];
   for (const { batch, issue } of issues) pi.sendMessage(validationMessage(batch, issue, true));
-}
-
-function reportBackgroundError(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  batch: ValidationBatch | undefined,
-  error: unknown,
-): void {
-  const message = error instanceof Error ? error.message : String(error);
-  setValidationStatus(ctx, "checks:error");
-  pi.sendMessage({
-    customType: "post-edit-checks",
-    content: `Post-edit validation extension failed: ${message}`,
-    display: true,
-    details: { revision: batch?.revision, files: batch?.files, error: message },
-  });
 }
 
 function isCurrentBatch(revision: number, signal: AbortSignal): boolean {
@@ -514,27 +423,28 @@ async function runValidationBatch(
   }
 
   let issues = 0;
-  for (const wave of validationCommandWaves(batch.commands)) {
-    await Promise.all(
-      wave.map(async (command) => {
-        const result = await runCommand(command.executable, command.args, ctx.cwd, signal);
-        const issue = validationIssueForResult(command, result);
-        if (!issue) return;
-        await waitForEditQuiescence();
-        if (!isCurrentBatch(batch.revision, signal)) return;
-        issues += 1;
-        reportIssue(pi, ctx, batch, issue);
-      }),
-    );
+  for (const command of batch.commands) {
+    const result = await runCommand(command.executable, command.args, ctx.cwd, signal);
+    if (signal.aborted) return;
+    const issue = validationIssueForResult(command, result);
+    if (!issue) continue;
+    await waitForEditQuiescence();
     if (!isCurrentBatch(batch.revision, signal)) return;
+    issues += 1;
+    reportIssue(pi, ctx, batch, issue);
   }
 
+  if (signal.aborted) return;
   await waitForEditQuiescence();
   if (issues === 0 && isCurrentBatch(batch.revision, signal)) setValidationStatus(ctx, undefined);
 }
 
 async function launchPendingBatch(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
   pendingTimer = undefined;
+  if (!canExecute()) {
+    cancelValidation(ctx);
+    return;
+  }
   if (activeEditToolCallIds.size > 0 || pendingFiles.size === 0) {
     schedulePendingBatch(pi, ctx);
     return;
@@ -543,17 +453,16 @@ async function launchPendingBatch(pi: ExtensionAPI, ctx: ExtensionContext): Prom
   const files = relativeFiles(ctx.cwd, pendingFiles);
   const revision = editRevision;
   pendingFiles.clear();
-  const scripts = await packageScripts(ctx.cwd);
-  const commands = buildValidationCommands(scripts, files, { runUnitTests: RUN_UNIT_TESTS });
+  const commands = buildValidationCommands();
   const controller = new AbortController();
   const batch: ValidationBatch = { revision, files, commands };
   activeRun = { revision, controller };
 
   try {
     await runValidationBatch(pi, ctx, batch, controller.signal);
-  } catch (error) {
+  } catch {
     if (!controller.signal.aborted && isCurrentBatch(revision, controller.signal))
-      reportBackgroundError(pi, ctx, batch, error);
+      setValidationStatus(ctx, undefined);
   } finally {
     if (activeRun?.revision === revision) activeRun = undefined;
     schedulePendingBatch(pi, ctx);
@@ -596,6 +505,7 @@ function queueAffectedPaths(
   ctx: ExtensionContext,
   affectedPaths: string[],
 ): void {
+  if (!canExecute()) return;
   const files = checkableAffectedFiles(ctx.cwd, affectedPaths);
   if (files.length === 0) return;
 
@@ -613,7 +523,8 @@ async function runAwaitedMultiEditValidation(
 ): Promise<void> {
   awaitedMultiEditToolCallIds.add(request.toolCallId);
   releaseEditToolCall(pi, request.ctx, request.toolCallId);
-  if (checkableAffectedFiles(request.ctx.cwd, request.affectedPaths).length === 0) return;
+  if (!canExecute() || checkableAffectedFiles(request.ctx.cwd, request.affectedPaths).length === 0)
+    return;
 
   queueAffectedPaths(pi, request.ctx, request.affectedPaths);
   clearPendingTimer();
@@ -623,12 +534,20 @@ async function runAwaitedMultiEditValidation(
 }
 
 export default function postEditChecks(pi: ExtensionAPI) {
+  let unsubscribeAccessMode: (() => void) | undefined;
+
   pi.on("session_start", (_event, ctx) => {
     resetValidationState();
     setValidationStatus(ctx, undefined);
+    unsubscribeAccessMode?.();
+    unsubscribeAccessMode = subscribeToAccessMode((mode) => {
+      if (!canExecute(mode)) cancelValidation(ctx);
+    });
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    unsubscribeAccessMode?.();
+    unsubscribeAccessMode = undefined;
     resetValidationState();
     setValidationStatus(ctx, undefined);
   });

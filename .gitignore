@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
-
+tmp
+tmp/
+.pi/worktrees/
 # Pi runtime artifacts
 .pi/tmp/
 

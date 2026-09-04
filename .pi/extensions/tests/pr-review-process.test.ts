@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  reviewProcessAnalysisTimeout,
+  reviewProcessPatternTimeout,
+} from "../pr-review/process-agents";
+import {
   buildImmediateFixPrompt,
   buildPrioritizedReviewPlan,
   buildReviewDiscussions,
@@ -97,6 +101,24 @@ const analysis = (
 });
 
 describe("terminal-first PR review process", () => {
+  test("uses ten-minute analysis and policy timeouts unless configured", () => {
+    expect(reviewProcessAnalysisTimeout({})).toBe(600_000);
+    expect(reviewProcessPatternTimeout({})).toBe(600_000);
+    expect(
+      reviewProcessAnalysisTimeout({ PI_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS: "900000" }),
+    ).toBe(900_000);
+    expect(
+      reviewProcessPatternTimeout({ PI_REVIEW_PROCESS_PATTERN_TIMEOUT_MS: "1200000" }),
+    ).toBe(1_200_000);
+
+    expect(
+      reviewProcessAnalysisTimeout({ PI_REVIEW_PROCESS_ANALYSIS_TIMEOUT_MS: "invalid" }),
+    ).toBe(600_000);
+    expect(
+      reviewProcessPatternTimeout({ PI_REVIEW_PROCESS_PATTERN_TIMEOUT_MS: "invalid" }),
+    ).toBe(600_000);
+  });
+
   test("shows elapsed phase and active review-agent count", () => {
     expect(formatProcessProgress("classifying", 65_000, 1, "14 discussions")).toBe(
       "⏳:classifying 1:05 14 discussions review-agents:1",
@@ -280,6 +302,16 @@ describe("terminal-first PR review process", () => {
       },
     );
 
+    expect(prompt).toContain("## Pre-edit all-comment pattern review");
+    expect(prompt).toContain(
+      "Do not make any code, test, configuration, documentation, or generated-file change",
+    );
+    expect(prompt).toContain("reviewed every comment in the complete included PR comment inventory");
+    expect(prompt).toContain("inspect the full PR diff and all PR-changed files");
+    expect(prompt).toContain("every place it applies within the PR");
+    expect(prompt).toContain("including uncommented occurrences");
+    expect(prompt).toContain("### thread-2 — context only—not independently approved");
+    expect(prompt).toContain("This typo should be corrected");
     expect(prompt).toContain("## Correctness and security test-first protocol");
     expect(prompt).toContain("do not edit related production code");
     expect(prompt).toContain("Immediately before running it, tell the user");

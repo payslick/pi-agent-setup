@@ -1,4 +1,10 @@
+import { isAccessMode, type AccessMode } from "../access-mode/state";
+
 export type PrefixNavigationScope = "all" | "prompts";
+
+export type PrefixAccessModeAction =
+  | { kind: "cycle"; direction: -1 | 1 }
+  | { kind: "select"; mode: AccessMode };
 
 export type PrefixNavigationAction =
   | { kind: "relative"; direction: -1 | 1; count: number; scope: PrefixNavigationScope }
@@ -9,6 +15,7 @@ export type PrefixNavigationAction =
 
 export type PrefixSequenceResult =
   | { kind: "pending" }
+  | { kind: "accessMode"; action: PrefixAccessModeAction }
   | { kind: "navigation"; action: PrefixNavigationAction }
   | { kind: "passthrough" }
   | { kind: "invalid" };
@@ -33,6 +40,18 @@ export class PrefixSequence {
     this.waitingForSecondG = false;
   }
 
+  feedAccessModeTab(direction: -1 | 1): PrefixSequenceResult {
+    if (this.promptsOnly || this.waitingForSecondG) return this.invalid();
+    if (!this.countDigits) return { kind: "accessMode", action: { kind: "cycle", direction } };
+
+    const digits = this.countDigits;
+    const mode = Number(digits);
+    this.reset();
+    return direction === 1 && /^[1-4]$/.test(digits) && isAccessMode(mode)
+      ? { kind: "accessMode", action: { kind: "select", mode } }
+      : { kind: "invalid" };
+  }
+
   feed(character: string | undefined): PrefixSequenceResult {
     if (!character) return this.hasPendingInput() ? this.invalid() : { kind: "passthrough" };
 
@@ -47,7 +66,7 @@ export class PrefixSequence {
 
     if (
       !this.promptsOnly &&
-      (/^[1-9]$/.test(character) || (this.countDigits && character === "0"))
+      /^[0-9]$/.test(character)
     ) {
       this.countDigits += character;
       return { kind: "pending" };

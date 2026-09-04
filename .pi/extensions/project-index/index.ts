@@ -2,6 +2,8 @@ import { constants, type Dirent } from "node:fs";
 import { access, open, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveAccessPath } from "../access-mode/path-policy";
+import { canAccessHostPaths, getAccessProjectRoot } from "../access-mode/state";
 import {
   analyzeNativeSymbol,
   closeNativeSymbolAnalyzers,
@@ -143,18 +145,15 @@ async function canonicalDirectory(candidate: string, label: string): Promise<str
 async function resolveProjectRoot(
   cwd: string,
   requestedRoot?: string,
-): Promise<{
-  cwd: string;
-  root: string;
-}> {
+): Promise<{ cwd: string; root: string }> {
   const canonicalCwd = await canonicalDirectory(cwd, "Current working directory");
+  const projectRoot = getAccessProjectRoot(cwd);
+  const canonicalProjectRoot = await canonicalDirectory(projectRoot, "Access project root");
   if (requestedRoot?.trim()) {
-    const candidate = path.resolve(cwd, requestedRoot.trim());
+    const candidate = resolveAccessPath(cwd, requestedRoot.trim());
     const root = await canonicalDirectory(candidate, "Requested root");
-    if (!isInside(canonicalCwd, root)) {
-      throw new Error(
-        `Requested root resolves outside the current working directory: ${requestedRoot}`,
-      );
+    if (!canAccessHostPaths() && !isInside(canonicalProjectRoot, root)) {
+      throw new Error(`Requested root is outside the project: ${requestedRoot}`);
     }
     return { cwd: canonicalCwd, root };
   }
@@ -713,9 +712,10 @@ function resolveChangedFile(input: string, scanResult: ScanResult): IndexedFile 
   const filesByAbsolutePath = new Map(
     scanResult.files.map((file) => [path.normalize(file.absolutePath), file] as const),
   );
-  const bases = path.isAbsolute(input)
-    ? [path.resolve(input)]
-    : [path.resolve(scanResult.cwd, input), path.resolve(scanResult.root, input)];
+  const bases =
+    path.isAbsolute(input) || input.startsWith("~")
+      ? [resolveAccessPath(scanResult.cwd, input)]
+      : [resolveAccessPath(scanResult.cwd, input), resolveAccessPath(scanResult.root, input)];
   for (const base of bases) {
     for (const candidate of moduleCandidates(base)) {
       const file = filesByAbsolutePath.get(candidate);

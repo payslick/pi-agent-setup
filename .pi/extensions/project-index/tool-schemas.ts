@@ -14,7 +14,9 @@ export const searchSchema = Type.Object({
   query: Type.Optional(
     Type.String({ description: "Project question/query to locate relevant sources." }),
   ),
-  root: Type.Optional(Type.String({ description: "Root to query (relative to Pi cwd)." })),
+  root: Type.Optional(
+    Type.String({ description: "Root to query; host paths require access mode 4." }),
+  ),
   maxFiles: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 12 })),
   includeTests: Type.Optional(Type.Boolean({ default: true })),
   includeDocs: Type.Optional(Type.Boolean({ default: true })),
@@ -42,7 +44,9 @@ export const searchSchema = Type.Object({
 
 export const impactSchema = Type.Object({
   file: Type.String({ description: "Changed file path to analyze for affected pages/API/tests." }),
-  root: Type.Optional(Type.String({ description: "Root to query (relative to Pi cwd)." })),
+  root: Type.Optional(
+    Type.String({ description: "Root to query; host paths require access mode 4." }),
+  ),
   maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 30 })),
   includeTests: Type.Optional(Type.Boolean({ default: true })),
 });

@@ -11,6 +11,7 @@ import {
   annotateMessageLines,
   createMessageMetadataResolver,
   cycleConversationView,
+  formatMarkdownHeadingsForTerminal,
   formatMessageTimestamp,
   formatReadInput,
   installConversationPresentation,
@@ -114,6 +115,55 @@ describe("conversation presentation", () => {
       const answerIndex = answerLines.findIndex((line) => line.includes("assistant"));
       expect(stripTerminalCodes(answerLines[answerIndex + 1] ?? "")).toEndWith("#2");
       expect(formatMessageTimestamp(timestamp)).toBe("09:05");
+    } finally {
+      restore();
+    }
+  });
+
+  test("renders H3 headings with chevrons instead of literal hashes", () => {
+    initTheme("dark");
+    resetConversationView();
+    const restore = installConversationPresentation();
+    try {
+      const assistantMessage = new AssistantMessageComponent({
+        role: "assistant",
+        content: [{ type: "text", text: "### Nested heading" }],
+        timestamp: Date.now(),
+      } as never);
+      const rendered = assistantMessage.render(40).map(stripTerminalCodes).join("\n");
+
+      expect(rendered).toContain("> > > Nested heading");
+      expect(rendered).not.toContain("### Nested heading");
+      expect(formatMarkdownHeadingsForTerminal("```md\n### Example\n```")).toBe(
+        "```md\n### Example\n```",
+      );
+      expect(formatMarkdownHeadingsForTerminal("\t### Indented code")).toBe("\t### Indented code");
+    } finally {
+      restore();
+    }
+  });
+
+  test("renders unordered lists with bullet characters", () => {
+    initTheme("dark");
+    resetConversationView();
+    const restore = installConversationPresentation();
+    try {
+      const assistantMessage = new AssistantMessageComponent({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "- dash\n* star\n+ plus\n\n```text\n- code\n```",
+          },
+        ],
+        timestamp: Date.now(),
+      } as never);
+      const rendered = assistantMessage.render(40).map(stripTerminalCodes).join("\n");
+
+      expect(rendered).toContain("• dash");
+      expect(rendered).toContain("• star");
+      expect(rendered).toContain("• plus");
+      expect(rendered).toContain("- code");
     } finally {
       restore();
     }

@@ -1,9 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { assertProjectPath, resolveAccessPath } from "./access-mode/path-policy";
+import { getAccessProjectRoot } from "./access-mode/state";
 import { replaceSearchCommand } from "./bash-guard";
 
 const TOOL_NAME = "read-many-files-lines";
@@ -101,26 +102,20 @@ export function formatReadManySpec(raw: string): string {
   return `${range.file}:${range.startLine}-${endLine}`;
 }
 
-function resolveInsideRoot(root: string, filePath: string): string | null {
-  const absolutePath = path.resolve(root, filePath);
-  const relativePath = path.relative(root, absolutePath);
-  const insideRoot =
-    relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-  return insideRoot ? absolutePath : null;
-}
-
-async function readRange(root: string, range: FileLineRange): Promise<string> {
+async function readRange(root: string, projectRoot: string, range: FileLineRange): Promise<string> {
   if (!range.file) return `=== ${range.raw} ===\n[ERROR: empty file path]\n`;
   if (range.startLine < 1) return `=== ${range.raw} ===\n[ERROR: start line must be >= 1]\n`;
   if (range.endLine < range.startLine)
     return `=== ${range.raw} ===\n[ERROR: end line must be >= start line]\n`;
 
-  const absolutePath = resolveInsideRoot(root, range.file);
-  if (absolutePath === null)
+  try {
+    await assertProjectPath(projectRoot, resolveAccessPath(root, range.file));
+  } catch {
     return `=== ${range.raw} ===\n[ERROR: path is outside the current working directory]\n`;
+  }
 
   try {
-    const text = await readFile(absolutePath, "utf8");
+    const text = await readFile(resolveAccessPath(root, range.file), "utf8");
     const lines = text.split(/\r?\n/);
     const endLine = Math.min(range.endLine, lines.length);
     const selectedLines = lines.slice(range.startLine - 1, endLine);
@@ -316,8 +311,9 @@ export default function readManyFilesLines(pi: ExtensionAPI) {
     ],
     async execute(_toolCallId, params: ReadManyFilesLinesInput) {
       const root = process.cwd();
+      const projectRoot = getAccessProjectRoot(root);
       const ranges = params.specs.map(parseRange);
-      const chunks = await Promise.all(ranges.map((range) => readRange(root, range)));
+      const chunks = await Promise.all(ranges.map((range) => readRange(root, projectRoot, range)));
       return {
         content: [{ type: "text" as const, text: chunks.join("\n") }],
         details: { files: ranges.length },

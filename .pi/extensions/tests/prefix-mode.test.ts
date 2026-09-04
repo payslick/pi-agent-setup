@@ -15,7 +15,9 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 
+import { accessModeStatus } from "../access-mode/state";
 import { resolveFooterTopLine, resolvePrefixFooterLines } from "../context-summary-footer";
+import { accessModeTabDirection, prefixHelpGroups, targetAccessMode } from "../prefix-mode";
 import {
   adjacentMessageIndex,
   MessageScroller,
@@ -177,6 +179,12 @@ const fullscreenMessageScrollerHarness = (
 };
 
 describe("Pi prefix commands", () => {
+  test("matches Tab and Shift+Tab with Pi TUI keys", () => {
+    expect(accessModeTabDirection("\t")).toBe(1);
+    expect(accessModeTabDirection("\x1b[Z")).toBe(-1);
+    expect(accessModeTabDirection("x")).toBeUndefined();
+  });
+
   test("groups every registered option by function and resolves the pressed key", () => {
     const registry = new PrefixCommandRegistry();
     const search = fakeCommand("/", "search session", "Session");
@@ -204,6 +212,19 @@ describe("Pi prefix commands", () => {
     expect(registry.resolve("x")).toBeUndefined();
   });
 
+  test("advertises access bindings and the selected mode in the prefix footer", () => {
+    const footer = new PrefixCommandRegistry().footerText(prefixHelpGroups());
+
+    expect(footer).toContain(
+      [
+        "Access: Tab next",
+        "Shift+Tab previous",
+        "1-4 then Tab select",
+        `Selected ${accessModeStatus()}`,
+      ].join("  •  "),
+    );
+  });
+
   test("shows active search position on the footer's top line", () => {
     expect(resolveFooterTopLine("session summary", "Session search /payroll (4/88)")).toBe(
       "Session search /payroll (4/88)",
@@ -223,6 +244,47 @@ describe("Pi prefix commands", () => {
 });
 
 describe("prefix navigation sequences", () => {
+  test("parses access mode cycling, direct selection, and invalid indexes", () => {
+    const sequence = new PrefixSequence();
+
+    expect(sequence.feedAccessModeTab(1)).toEqual({
+      kind: "accessMode",
+      action: { kind: "cycle", direction: 1 },
+    });
+    expect(sequence.feedAccessModeTab(-1)).toEqual({
+      kind: "accessMode",
+      action: { kind: "cycle", direction: -1 },
+    });
+    expect(targetAccessMode({ kind: "cycle", direction: 1 }, 4)).toBe(1);
+    expect(targetAccessMode({ kind: "cycle", direction: -1 }, 1)).toBe(4);
+
+    for (const mode of [1, 2, 3, 4] as const) {
+      expect(sequence.feed(String(mode))).toEqual({ kind: "pending" });
+      expect(sequence.feedAccessModeTab(1)).toEqual({
+        kind: "accessMode",
+        action: { kind: "select", mode },
+      });
+      expect(targetAccessMode({ kind: "select", mode }, 1)).toBe(mode);
+    }
+
+    expect(sequence.feed("0")).toEqual({ kind: "pending" });
+    expect(sequence.feedAccessModeTab(1)).toEqual({ kind: "invalid" });
+    expect(sequence.display).toBe("");
+
+    expect(sequence.feed("0")).toEqual({ kind: "pending" });
+    expect(sequence.feed("1")).toEqual({ kind: "pending" });
+    expect(sequence.feedAccessModeTab(1)).toEqual({ kind: "invalid" });
+    expect(sequence.display).toBe("");
+
+    expect(sequence.feed("5")).toEqual({ kind: "pending" });
+    expect(sequence.feedAccessModeTab(1)).toEqual({ kind: "invalid" });
+    expect(sequence.display).toBe("");
+
+    expect(sequence.feed("2")).toEqual({ kind: "pending" });
+    expect(sequence.feedAccessModeTab(-1)).toEqual({ kind: "invalid" });
+    expect(sequence.display).toBe("");
+  });
+
   test("parses Vim-style counts and relative message motions", () => {
     const sequence = new PrefixSequence();
 

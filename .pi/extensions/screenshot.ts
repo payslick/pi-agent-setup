@@ -9,6 +9,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { assertProjectPath } from "./access-mode/path-policy";
+import { canExecute, getAccessProjectRoot } from "./access-mode/state";
 
 const STATUS_KEY = "screenshot";
 const WIDGET_KEY = "screenshot";
@@ -98,9 +100,14 @@ async function pathExists(filePath: string): Promise<boolean> {
 async function resolveAppRoot(cwd: string): Promise<string> {
   const override =
     process.env.PI_SCREENSHOT_APP_ROOT?.trim() || process.env.PI_DEBUG_UI_APP_ROOT?.trim();
-  if (override) return path.resolve(cwd, override);
   const nestedApp = path.join(cwd, "app");
-  return (await pathExists(path.join(nestedApp, "package.json"))) ? nestedApp : cwd;
+  const appRoot = override
+    ? path.resolve(cwd, override)
+    : (await pathExists(path.join(nestedApp, "package.json")))
+      ? nestedApp
+      : cwd;
+  await assertProjectPath(getAccessProjectRoot(cwd), appRoot);
+  return appRoot;
 }
 
 function unquoteEnvValue(value: string): string {
@@ -526,6 +533,7 @@ function registerScreenshotCommand(pi: ExtensionAPI): void {
 
       setStatus(ctx, "screenshot:running");
       try {
+        if (!canExecute()) throw new Error("Screenshots require access mode 3 or 4.");
         const result = await runScreenshot(pi, ctx, parseScreenshotCommand(trimmed), ctx.signal);
         setWidget(ctx, resultLines(result));
         if (ctx.hasUI)

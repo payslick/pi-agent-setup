@@ -63,7 +63,6 @@ export function selectedReviewAgentDefaults(pi, ctx) {
 }
 
 export function buildReviewAgentArguments(ctx, input) {
-  const shellSafeSystemPrompt = input.systemPrompt.replace(/\s+/g, " ").trim();
   return [
     ...(input.model ? ["--model", input.model] : []),
     "--thinking",
@@ -80,7 +79,7 @@ export function buildReviewAgentArguments(ctx, input) {
     "--no-prompt-templates",
     "--no-context-files",
     "--system-prompt",
-    shellSafeSystemPrompt,
+    input.systemPrompt,
   ];
 }
 
