@@ -5,8 +5,9 @@ Keep responses short and direct. Avoid generic phrasing, compliments,
 restating the request, fluff, and embellishment. Use precise technical terms
 when useful.
 
-Think ahead before editing. Prefer `read-many-files-lines` for reading
-files and `multi-edit` for coordinated edits across files.
+Think ahead before acting. Do not write or run ad hoc scripts when an existing tool or simple command can perform the task. This applies to every language, including Python, JavaScript/TypeScript, Bun, Node, Ruby, Perl, AWK, and shell. Use structured read tools for reading, `rg` for searching and filtering, `jq` for JSON, and `multi-edit` for changes to existing files. Use existing checked-in project scripts for established workflows.
+
+Do not evade this rule by translating a blocked command into another language, embedding code with `-e` or `-c`, using a heredoc, or staging a temporary script. Creating a script is appropriate only when the script itself is a requested deliverable or a genuine reusable part of the project, not temporary glue for the current operation.
 
 Use `project_index_search` to locate relevant project files, concepts, and
 implementations before broad manual searching. For exact symbol questions,

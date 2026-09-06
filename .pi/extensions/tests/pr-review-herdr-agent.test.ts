@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   finalAssistantTextFromSession,
@@ -16,6 +17,16 @@ const originalHerdrEnv = process.env.HERDR_ENV;
 const originalWorkspaceId = process.env.HERDR_WORKSPACE_ID;
 const originalStartMaxAttempts = process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS;
 const originalStartRetryDelay = process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS;
+const originalPromptMaxAttempts = process.env.PI_REVIEW_AGENT_PROMPT_MAX_ATTEMPTS;
+const originalPromptRetryDelay = process.env.PI_REVIEW_AGENT_PROMPT_RETRY_DELAY_MS;
+const originalPromptEffectTimeout = process.env.PI_REVIEW_AGENT_PROMPT_EFFECT_TIMEOUT_MS;
+const originalFreshTabMaxAttempts = process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS;
+const originalFreshTabRetryDelay = process.env.PI_REVIEW_AGENT_FRESH_TAB_RETRY_DELAY_MS;
+const originalSessionMaxAttempts = process.env.PI_REVIEW_AGENT_SESSION_MAX_ATTEMPTS;
+const originalSessionRetryDelay = process.env.PI_REVIEW_AGENT_SESSION_RETRY_DELAY_MS;
+const readySessionPath = fileURLToPath(
+  new URL("./fixtures/pr-review-ready-session.jsonl", import.meta.url),
+);
 
 beforeEach(() => {
   process.env.HERDR_ENV = "1";
@@ -32,6 +43,27 @@ afterEach(() => {
   if (originalStartRetryDelay === undefined)
     delete process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS;
   else process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = originalStartRetryDelay;
+  if (originalPromptMaxAttempts === undefined)
+    delete process.env.PI_REVIEW_AGENT_PROMPT_MAX_ATTEMPTS;
+  else process.env.PI_REVIEW_AGENT_PROMPT_MAX_ATTEMPTS = originalPromptMaxAttempts;
+  if (originalPromptRetryDelay === undefined)
+    delete process.env.PI_REVIEW_AGENT_PROMPT_RETRY_DELAY_MS;
+  else process.env.PI_REVIEW_AGENT_PROMPT_RETRY_DELAY_MS = originalPromptRetryDelay;
+  if (originalPromptEffectTimeout === undefined)
+    delete process.env.PI_REVIEW_AGENT_PROMPT_EFFECT_TIMEOUT_MS;
+  else process.env.PI_REVIEW_AGENT_PROMPT_EFFECT_TIMEOUT_MS = originalPromptEffectTimeout;
+  if (originalFreshTabMaxAttempts === undefined)
+    delete process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS;
+  else process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS = originalFreshTabMaxAttempts;
+  if (originalFreshTabRetryDelay === undefined)
+    delete process.env.PI_REVIEW_AGENT_FRESH_TAB_RETRY_DELAY_MS;
+  else process.env.PI_REVIEW_AGENT_FRESH_TAB_RETRY_DELAY_MS = originalFreshTabRetryDelay;
+  if (originalSessionMaxAttempts === undefined)
+    delete process.env.PI_REVIEW_AGENT_SESSION_MAX_ATTEMPTS;
+  else process.env.PI_REVIEW_AGENT_SESSION_MAX_ATTEMPTS = originalSessionMaxAttempts;
+  if (originalSessionRetryDelay === undefined)
+    delete process.env.PI_REVIEW_AGENT_SESSION_RETRY_DELAY_MS;
+  else process.env.PI_REVIEW_AGENT_SESSION_RETRY_DELAY_MS = originalSessionRetryDelay;
 });
 
 describe("PR review Herdr agents", () => {
@@ -53,9 +85,7 @@ describe("PR review Herdr agents", () => {
 
     expect(defaults).toEqual({ model: "anthropic/claude-opus-4-6", thinking: "max" });
     expect(args).toContain("anthropic/claude-opus-4-6");
-    expect(args[args.indexOf("--system-prompt") + 1]).toBe(
-      "Review the PR.\nReturn JSON only.",
-    );
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe("Review the PR.\nReturn JSON only.");
     expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual([
       "--thinking",
       "max",
@@ -76,6 +106,7 @@ describe("PR review Herdr agents", () => {
     expect(args).toContain("--no-focus");
     expect(args).toContain("PI_SUBAGENT_ID=subagent-1");
     expect(args).toContain("PI_DISABLE_SOUNDS=1");
+    expect(args).toContain("PI_ACCESS_PROJECT_ROOT=/repo");
     expect(args).toContain("HERDR_ENV=0");
   });
 
@@ -156,6 +187,7 @@ describe("PR review Herdr agents", () => {
     };
 
     try {
+      const progressEvents: Array<{ phase: string; sessionPath?: string }> = [];
       const result = await runPiAgentInHerdr(
         pi as never,
         { cwd: directory, signal: undefined } as never,
@@ -173,10 +205,21 @@ describe("PR review Herdr agents", () => {
             "--append-system-prompt",
             existingPromptPath,
           ],
+          onProgress: (phase, details) => progressEvents.push({ phase, ...details }),
         },
       );
 
       expect(result.code).toBe(0);
+      expect(progressEvents.map(({ phase }) => phase)).toEqual([
+        "queued",
+        "starting",
+        "submitting",
+        "working",
+        "finalizing",
+      ]);
+      expect(progressEvents.find(({ phase }) => phase === "working")?.sessionPath).toBe(
+        sessionPath,
+      );
       expect(result.stdout).toBe('{"findings":[]}');
       const createCall = calls.find((args) => args[0] === "tab" && args[1] === "create");
       const startCall = calls.find((args) => args[0] === "agent" && args[1] === "start");
@@ -198,9 +241,11 @@ describe("PR review Herdr agents", () => {
       expect(await Bun.file(startupPromptPaths[1] ?? "").exists()).toBeFalse();
       expect(await Bun.file(existingPromptPath).exists()).toBeTrue();
       expect(promptCall).toContain("Review the PR");
+      expect(promptCall).toContain("working");
       expect(promptCall).toContain("idle");
       expect(promptCall).toContain("done");
       expect(promptCall).toContain("blocked");
+      expect(calls.some((args) => args[0] === "agent" && args[1] === "wait")).toBeTrue();
       expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
       expect(calls.some((args) => args[0] === "notification")).toBeFalse();
     } finally {
@@ -210,6 +255,7 @@ describe("PR review Herdr agents", () => {
 
   test("waits for review-agent completion without a finite prompt timeout", async () => {
     const calls: Array<{ args: string[]; options?: { timeout?: number } }> = [];
+    let getCalls = 0;
     const pi = {
       exec: async (_command: string, args: string[], options?: { timeout?: number }) => {
         calls.push({ args, options });
@@ -223,9 +269,19 @@ describe("PR review Herdr agents", () => {
           };
         }
         if (args[0] === "agent" && args[1] === "get") {
+          getCalls += 1;
           return {
             code: 0,
-            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  ...(getCalls === 1
+                    ? { agent_session: { kind: "path", value: readySessionPath } }
+                    : {}),
+                },
+              },
+            }),
             stderr: "",
           };
         }
@@ -248,15 +304,151 @@ describe("PR review Herdr agents", () => {
 
     expect(result.code).toBe(0);
     const promptCall = calls.find(({ args }) => args[0] === "agent" && args[1] === "prompt");
+    const waitCall = calls.find(({ args }) => args[0] === "agent" && args[1] === "wait");
     expect(promptCall).toBeDefined();
+    expect(promptCall?.args).toContain("working");
     expect(promptCall?.args).not.toContain("--timeout");
     expect(promptCall?.options?.timeout).toBeUndefined();
+    expect(waitCall).toBeDefined();
+    expect(waitCall?.args).not.toContain("--timeout");
+    expect(waitCall?.options?.timeout).toBeUndefined();
+  });
+
+  test.each([
+    { code: 0, stdout: "", stderr: "" },
+    {
+      code: 1,
+      stdout: "",
+      stderr: JSON.stringify({ error: { code: "timeout", message: "timed out" } }),
+    },
+  ])("closes a lane tab when bounded completion times out", async (waitResult) => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { agent: { agent_session: { kind: "path", value: readySessionPath } } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "wait") return waitResult;
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    await expect(
+      runPiAgentInHerdr(pi as never, { cwd: "/repo", signal: undefined } as never, {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+        timeout: 50,
+      }),
+    ).rejects.toThrow(
+      'PR review lane "PR-correctness" did not complete within 50 ms. Its tab was closed',
+    );
+    expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
+  });
+
+  test("accepts a reported session path before Pi persists it and waits for completion", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pr-review-deferred-session-"));
+    const sessionPath = join(directory, "deferred.jsonl");
+    const calls: string[][] = [];
+    let markCompletionWaitStarted!: () => void;
+    let releaseCompletionWait!: () => void;
+    const completionWaitStarted = new Promise<void>((resolve) => (markCompletionWaitStarted = resolve));
+    const completionWait = new Promise<void>((resolve) => (releaseCompletionWait = resolve));
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "wait") {
+          markCompletionWaitStarted();
+          await completionWait;
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  agent_session: { kind: "path", value: sessionPath },
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    try {
+      const resultPromise = runPiAgentInHerdr(
+        pi as never,
+        { cwd: "/repo", signal: undefined } as never,
+        {
+          label: "PR-correctness",
+          prompt: "Review the PR",
+          piArgs: ["--no-tools"],
+        },
+      );
+
+      await completionWaitStarted;
+      expect(await Bun.file(sessionPath).exists()).toBeFalse();
+      expect(calls.some((args) => args[0] === "agent" && args[1] === "read")).toBeFalse();
+
+      await writeFile(
+        sessionPath,
+        [
+          JSON.stringify({ type: "message", message: { role: "assistant", content: "draft" } }),
+          JSON.stringify({
+            type: "message",
+            message: { role: "assistant", content: '{"findings":[]}' },
+          }),
+        ].join("\n"),
+        "utf8",
+      );
+      releaseCompletionWait();
+      const result = await resultPromise;
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe('{"findings":[]}');
+      expect(calls.some((args) => args[0] === "agent" && args[1] === "read")).toBeFalse();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("retries when a new review pane is not ready yet", async () => {
     process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS = "3";
     process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = "0";
     let startAttempts = 0;
+    let getCalls = 0;
     const pi = {
       exec: async (_command: string, args: string[]) => {
         if (args[0] === "tab" && args[1] === "create") {
@@ -279,9 +471,19 @@ describe("PR review Herdr agents", () => {
           }
         }
         if (args[0] === "agent" && args[1] === "get") {
+          getCalls += 1;
           return {
             code: 0,
-            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  ...(getCalls === 1
+                    ? { agent_session: { kind: "path", value: readySessionPath } }
+                    : {}),
+                },
+              },
+            }),
             stderr: "",
           };
         }
@@ -306,10 +508,180 @@ describe("PR review Herdr agents", () => {
     expect(startAttempts).toBe(2);
   });
 
+  test("resubmits a staged prompt with Enter instead of duplicating its text", async () => {
+    process.env.PI_REVIEW_AGENT_PROMPT_MAX_ATTEMPTS = "2";
+    process.env.PI_REVIEW_AGENT_PROMPT_RETRY_DELAY_MS = "0";
+    process.env.PI_REVIEW_AGENT_PROMPT_EFFECT_TIMEOUT_MS = "1";
+    let getCalls = 0;
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "prompt") {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: JSON.stringify({ error: { code: "agent_prompt_stalled" } }),
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          getCalls += 1;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  ...(getCalls === 2
+                    ? { agent_session: { kind: "path", value: readySessionPath } }
+                    : {}),
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    const result = await runPiAgentInHerdr(
+      pi as never,
+      { cwd: "/repo", signal: undefined } as never,
+      {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(calls.filter((args) => args[0] === "agent" && args[1] === "prompt")).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === "agent" && args[1] === "send-keys")).toEqual([
+      ["agent", "send-keys", expect.any(String), "enter"],
+    ]);
+    const getCallIndices = calls.flatMap((args, index) =>
+      args[0] === "agent" && args[1] === "get" ? [index] : [],
+    );
+    const enterCallIndex = calls.findIndex(
+      (args) => args[0] === "agent" && args[1] === "send-keys",
+    );
+    expect(getCallIndices).toHaveLength(3);
+    expect(enterCallIndex).toBeGreaterThan(getCallIndices[0] ?? -1);
+    expect(enterCallIndex).toBeLessThan(getCallIndices[1] ?? Number.POSITIVE_INFINITY);
+  });
+
+  test("accepts an ID-backed agent session and reads output from the terminal fallback", async () => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  agent_session: { kind: "id", value: "agent-session-1" },
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    const result = await runPiAgentInHerdr(
+      pi as never,
+      { cwd: "/repo", signal: undefined } as never,
+      {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('{"findings":[]}');
+    expect(calls.some((args) => args[0] === "agent" && args[1] === "read")).toBeTrue();
+  });
+
+  test("can use terminal output when an agent intentionally disables session reporting", async () => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+
+    const result = await runPiAgentInHerdr(
+      pi as never,
+      { cwd: "/repo", signal: undefined } as never,
+      {
+        label: "PR-process-analysis",
+        prompt: "Analyze comments",
+        piArgs: ["--no-tools", "--no-extensions"],
+        requireAgentSession: false,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('{"findings":[]}');
+    expect(calls.filter((args) => args[0] === "agent" && args[1] === "get")).toHaveLength(1);
+  });
+
   test("serializes pane creation and agent startup", async () => {
     let tabCount = 0;
     let activeStarts = 0;
     let maximumActiveStarts = 0;
+    const getCallsByAgent = new Map<string, number>();
     const pi = {
       exec: async (_command: string, args: string[]) => {
         if (args[0] === "tab" && args[1] === "create") {
@@ -332,9 +704,21 @@ describe("PR review Herdr agents", () => {
           activeStarts -= 1;
         }
         if (args[0] === "agent" && args[1] === "get") {
+          const agentName = args[2] ?? "";
+          const getCalls = (getCallsByAgent.get(agentName) ?? 0) + 1;
+          getCallsByAgent.set(agentName, getCalls);
           return {
             code: 0,
-            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  ...(getCalls === 1
+                    ? { agent_session: { kind: "path", value: readySessionPath } }
+                    : {}),
+                },
+              },
+            }),
             stderr: "",
           };
         }
@@ -356,7 +740,133 @@ describe("PR review Herdr agents", () => {
     expect(maximumActiveStarts).toBe(1);
   });
 
+  test("prompts before requiring a Pi session reference and closes an unresponsive lane", async () => {
+    process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS = "1";
+    process.env.PI_REVIEW_AGENT_SESSION_MAX_ATTEMPTS = "2";
+    process.env.PI_REVIEW_AGENT_SESSION_RETRY_DELAY_MS = "0";
+    const notifications: Array<{ message: string; level: string }> = [];
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: { tab: { tab_id: "tab-1" }, root_pane: { pane_id: "pane-1" } },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({ result: { agent: { agent_status: "idle" } } }),
+            stderr: "",
+          };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+    const ctx = {
+      cwd: "/repo",
+      signal: undefined,
+      hasUI: true,
+      ui: {
+        notify: (message: string, level: string) => notifications.push({ message, level }),
+      },
+    };
+
+    await expect(
+      runPiAgentInHerdr(pi as never, ctx as never, {
+        label: "PR-correctness",
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+      }),
+    ).rejects.toThrow("did not expose a session reference after 2 readiness checks");
+    expect(calls.filter((args) => args[0] === "agent" && args[1] === "get")).toHaveLength(2);
+    const promptCallIndex = calls.findIndex((args) => args[0] === "agent" && args[1] === "prompt");
+    const firstGetCallIndex = calls.findIndex((args) => args[0] === "agent" && args[1] === "get");
+    expect(promptCallIndex).toBeGreaterThan(-1);
+    expect(promptCallIndex).toBeLessThan(firstGetCallIndex);
+    expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.level).toBe("error");
+    expect(notifications[0]?.message).toContain("unresponsive tab was closed");
+    expect(notifications[0]?.message).toContain("reported as omitted");
+  });
+
+  test("releases the startup lock after one concurrent lane lacks a session", async () => {
+    process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS = "1";
+    process.env.PI_REVIEW_AGENT_SESSION_MAX_ATTEMPTS = "1";
+    process.env.PI_REVIEW_AGENT_SESSION_RETRY_DELAY_MS = "0";
+    let tabCount = 0;
+    let failingAgent = "";
+    const getCallsByAgent = new Map<string, number>();
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "tab" && args[1] === "create") {
+          tabCount += 1;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                tab: { tab_id: `tab-${tabCount}` },
+                root_pane: { pane_id: `pane-${tabCount}` },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "start" && !failingAgent) {
+          failingAgent = args[2] ?? "";
+        }
+        if (args[0] === "agent" && args[1] === "get") {
+          const agentName = args[2] ?? "";
+          const getCalls = (getCallsByAgent.get(agentName) ?? 0) + 1;
+          getCallsByAgent.set(agentName, getCalls);
+          const hasSession = agentName !== failingAgent && getCalls === 1;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                agent: {
+                  agent_status: "idle",
+                  ...(hasSession
+                    ? { agent_session: { kind: "path", value: readySessionPath } }
+                    : {}),
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (args[0] === "agent" && args[1] === "read") {
+          return { code: 0, stdout: '{"findings":[]}', stderr: "" };
+        }
+        return { code: 0, stdout: JSON.stringify({ result: {} }), stderr: "" };
+      },
+    };
+    const runAgent = (label: string) =>
+      runPiAgentInHerdr(pi as never, { cwd: "/repo", signal: undefined } as never, {
+        label,
+        prompt: "Review the PR",
+        piArgs: ["--no-tools"],
+      });
+
+    const results = await Promise.allSettled([runAgent("PR-correctness"), runAgent("PR-tests")]);
+
+    expect(results[0]?.status).toBe("rejected");
+    expect(results[1]?.status).toBe("fulfilled");
+    expect(calls.filter((args) => args[0] === "tab" && args[1] === "create")).toHaveLength(2);
+    expect(calls).toContainEqual(["tab", "close", "tab-1"]);
+    expect(calls).toContainEqual(["tab", "close", "tab-2"]);
+  });
+
   test("notifies when a review pane stays busy after every retry", async () => {
+    process.env.PI_REVIEW_AGENT_FRESH_TAB_MAX_ATTEMPTS = "1";
     process.env.PI_REVIEW_AGENT_START_MAX_ATTEMPTS = "2";
     process.env.PI_REVIEW_AGENT_START_RETRY_DELAY_MS = "0";
     const notifications: Array<{ message: string; level: string }> = [];
@@ -454,6 +964,7 @@ describe("PR review Herdr agents", () => {
     expect(processAgents).not.toContain("PI_REVIEW_PI_BIN");
     expect(reviewAgents).not.toContain('"--print"');
     expect(processAgents).not.toContain('"--print"');
+    expect(processAgents).toContain("requireAgentSession: false");
   });
 
   test("requires a Herdr workspace instead of falling back to hidden subprocesses", async () => {

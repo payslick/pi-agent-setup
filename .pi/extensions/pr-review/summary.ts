@@ -38,6 +38,7 @@ export function renderExecutiveSummary(
   options: RenderExecutiveSummaryOptions = {},
 ): string {
   const findings = [...input.findings];
+  const partialFindingCount = findings.filter((finding) => finding.partial === true).length;
   const maxPathLength = options.maxPathLength ?? DEFAULT_MAX_PATH_LENGTH;
   const lines = [
     "## Executive summary",
@@ -61,6 +62,13 @@ export function renderExecutiveSummary(
     }
   }
 
+  if (partialFindingCount) {
+    lines.push(
+      "",
+      `Recovered partial findings from failed lanes: ${partialFindingCount}. They are included in this report but excluded from GitHub comment drafts.`,
+    );
+  }
+
   if (input.ciStatus) lines.push("", ...renderCiStatusSection(input.ciStatus));
   if (input.coverage) lines.push("", ...renderCoverageSection(input.coverage));
   if (input.assessment) lines.push("", ...renderAssessmentSection(input.assessment));
@@ -74,7 +82,7 @@ export function renderExecutiveSummary(
       );
       return lines.join("\n");
     }
-    lines.push("", "No issues found");
+    lines.push("", "No issues found. Recommendation: approve the PR.");
     return lines.join("\n");
   }
 
@@ -402,7 +410,7 @@ function renderFindingRow(
   return renderTableRow([
     `${icon}${issueNumber}`,
     formatFindingLocation(finding, maxPathLength),
-    `${typeIcon(finding.type)} ${finding.title}`,
+    `${typeIcon(finding.type)} ${finding.title}${finding.partial ? " _(partial from failed lane)_" : ""}`,
   ]);
 }
 

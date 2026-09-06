@@ -185,6 +185,7 @@ const runPiAgent = async (
     label: options.label,
     prompt,
     timeout: options.timeout,
+    requireAgentSession: false,
     piArgs: [
       ...(model ? ["--model", model] : []),
       "--thinking",

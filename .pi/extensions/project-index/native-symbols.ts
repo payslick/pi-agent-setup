@@ -47,6 +47,7 @@ export interface NativeSymbolRequest {
   files: readonly NativeSymbolFile[];
   truncationReasons: readonly string[];
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 interface Occurrence {
@@ -80,7 +81,7 @@ export interface NativeSymbolAnalysis {
 }
 
 const scriptExtensions = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
-const activeApis = new Set<API>();
+const activeApis = new Map<API, string>();
 
 function normalized(filePath: string): string {
   const value = path.normalize(filePath);
@@ -93,10 +94,13 @@ function abortIfRequested(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Native symbol analysis aborted.");
 }
 
-function identifiersIn(sourceFile: SourceFile): Identifier[] {
+function identifiersIn(
+  sourceFile: SourceFile,
+  select: (identifier: Identifier) => boolean,
+): Identifier[] {
   const identifiers: Identifier[] = [];
   const visit = (node: Node): void => {
-    if (isIdentifier(node)) identifiers.push(node);
+    if (isIdentifier(node) && select(node)) identifiers.push(node);
     node.forEachChild(visit);
   };
   visit(sourceFile);
@@ -248,17 +252,32 @@ function recordDiagnosticCompleteness(
   }
 }
 
-async function collectOccurrences(
+interface LoadedSource {
+  file: NativeSymbolFile;
+  sourceFile: SourceFile;
+  project: Project;
+}
+
+function identifierIsInImportOrExport(node: Identifier): boolean {
+  let current: Node | undefined = node.parent;
+  while (current && current.kind !== current.getSourceFile().kind) {
+    if (isImportOrExportNode(current)) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+async function loadSources(
   projects: readonly Project[],
   files: readonly NativeSymbolFile[],
   reasons: Set<string>,
   signal?: AbortSignal,
-): Promise<Occurrence[]> {
-  const occurrences: Occurrence[] = [];
-  const loaded = new Set<string>();
-  const seen = new Set<string>();
+): Promise<LoadedSource[]> {
+  const loadedSources: LoadedSource[] = [];
+  const loadedPaths = new Set<string>();
   const projectByRootFile = new Map<string, Project>();
   for (const project of projects) {
+    abortIfRequested(signal);
     for (const rootFile of project.rootFiles) projectByRootFile.set(normalized(rootFile), project);
     const diagnostics = await project.program.getSyntacticDiagnostics().catch(() => undefined);
     recordDiagnosticCompleteness(diagnostics, reasons);
@@ -274,31 +293,46 @@ async function collectOccurrences(
       reasons.add("source-file-unavailable");
       continue;
     }
-    loaded.add(normalized(file.absolutePath));
-    const identifiers = identifiersIn(sourceFile);
-    const symbols = identifiers.length
-      ? await project.checker.getSymbolAtLocation(identifiers)
-      : [];
-    const canonical = await canonicalSymbols(project, identifiers, symbols);
+    loadedPaths.add(normalized(file.absolutePath));
+    loadedSources.push({ file, sourceFile, project });
+  }
+  for (const file of files) {
+    if (!loadedPaths.has(normalized(file.absolutePath))) reasons.add("uncovered-source-file");
+  }
+  return loadedSources;
+}
+
+async function collectCandidateOccurrences(
+  loadedSources: readonly LoadedSource[],
+  select: (identifier: Identifier) => boolean,
+  signal?: AbortSignal,
+): Promise<Occurrence[]> {
+  const occurrences: Occurrence[] = [];
+  for (const loaded of loadedSources) {
+    abortIfRequested(signal);
+    const identifiers = identifiersIn(loaded.sourceFile, select);
+    if (!identifiers.length) continue;
+    const symbols = await loaded.project.checker.getSymbolAtLocation(identifiers);
+    const canonical = await canonicalSymbols(loaded.project, identifiers, symbols);
     for (let index = 0; index < identifiers.length; index += 1) {
-      const node = identifiers[index]!;
-      const key = `${normalized(file.absolutePath)}:${node.pos}:${node.end}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
       occurrences.push({
-        file,
-        sourceFile,
-        project,
-        node,
+        ...loaded,
+        node: identifiers[index]!,
         symbol: symbols[index],
         canonical: canonical[index],
       });
     }
   }
-  for (const file of files) {
-    if (!loaded.has(normalized(file.absolutePath))) reasons.add("uncovered-source-file");
-  }
   return occurrences;
+}
+
+function uniqueOccurrences(occurrences: readonly Occurrence[]): Occurrence[] {
+  const unique = new Map<string, Occurrence>();
+  for (const occurrence of occurrences) {
+    const key = `${normalized(occurrence.file.absolutePath)}:${occurrence.node.pos}:${occurrence.node.end}`;
+    unique.set(key, occurrence);
+  }
+  return [...unique.values()];
 }
 
 function candidatePriority(candidate: Occurrence): number {
@@ -449,7 +483,7 @@ function formatAnalysis(
   };
 }
 
-export async function analyzeNativeSymbol(
+async function analyzeNativeSymbolOperation(
   request: NativeSymbolRequest,
 ): Promise<NativeSymbolAnalysis> {
   const reasons = new Set(request.truncationReasons);
@@ -470,7 +504,7 @@ export async function analyzeNativeSymbol(
     return formatAnalysis(request, [], reasons);
   }
   const api = new API({ cwd: request.root });
-  activeApis.add(api);
+  activeApis.set(api, request.root);
   let snapshot: Snapshot | undefined;
   try {
     snapshot = await openProjects(api, configs);
@@ -479,15 +513,35 @@ export async function analyzeNativeSymbol(
       reasons.add("project-unavailable");
       return formatAnalysis(request, [], reasons);
     }
-    const occurrences = await collectOccurrences(projects, relevantFiles, reasons, request.signal);
-    const named = occurrences.filter((occurrence) => occurrence.node.text === request.symbol);
+    const loadedSources = await loadSources(projects, relevantFiles, reasons, request.signal);
+    const discovery = await collectCandidateOccurrences(
+      loadedSources,
+      (identifier) =>
+        identifier.text === request.symbol || identifierIsInImportOrExport(identifier),
+      request.signal,
+    );
+    const named = discovery.filter((occurrence) => occurrence.node.text === request.symbol);
     const target = selectTarget(named);
     if (target.ambiguous) {
       reasons.add("ambiguous-target");
       return formatAnalysis(request, [], reasons);
     }
     if (!target.symbol) return formatAnalysis(request, [], reasons);
-    const matching = targetOccurrences(occurrences, target.symbol);
+    const candidateNames = new Set(
+      discovery
+        .filter((occurrence) => occurrence.canonical?.id === target.symbol?.id)
+        .map((occurrence) => occurrence.node.text),
+    );
+    candidateNames.add(request.symbol);
+    const usages = await collectCandidateOccurrences(
+      loadedSources,
+      (identifier) => candidateNames.has(identifier.text),
+      request.signal,
+    );
+    const matching = targetOccurrences(
+      uniqueOccurrences([...discovery, ...usages]),
+      target.symbol,
+    );
     const filesByPath = new Map(
       request.files.map((file) => [normalized(file.absolutePath), file] as const),
     );
@@ -509,7 +563,51 @@ export async function analyzeNativeSymbol(
   }
 }
 
-export async function closeNativeSymbolAnalyzers(): Promise<void> {
-  await Promise.all([...activeApis].map((api) => api.close().catch(() => undefined)));
-  activeApis.clear();
+export async function analyzeNativeSymbol(
+  request: NativeSymbolRequest,
+): Promise<NativeSymbolAnalysis> {
+  const timeoutMs = request.timeoutMs;
+  if (timeoutMs === undefined) return analyzeNativeSymbolOperation(request);
+
+  const controller = new AbortController();
+  const forwardAbort = (): void => controller.abort();
+  const closeOnAbort = (): void => {
+    void closeNativeSymbolAnalyzers(request.root);
+  };
+  request.signal?.addEventListener("abort", forwardAbort, { once: true });
+  controller.signal.addEventListener("abort", closeOnAbort, { once: true });
+  if (request.signal?.aborted) controller.abort();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(
+        new Error(
+          `Native symbol analysis timed out after ${timeoutMs} ms. Retry with source mode or a narrower root.`,
+        ),
+      );
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      analyzeNativeSymbolOperation({ ...request, signal: controller.signal }),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    request.signal?.removeEventListener("abort", forwardAbort);
+    controller.signal.removeEventListener("abort", closeOnAbort);
+  }
+}
+
+export async function closeNativeSymbolAnalyzers(root?: string): Promise<void> {
+  const matching = [...activeApis].filter(([, apiRoot]) => root === undefined || apiRoot === root);
+  await Promise.all(
+    matching.map(async ([api]) => {
+      await api.close().catch(() => undefined);
+      activeApis.delete(api);
+    }),
+  );
 }

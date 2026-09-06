@@ -92,6 +92,7 @@ export interface ReviewFinding {
   suggestion?: string;
   confidence?: number;
   evidence?: string[];
+  partial?: boolean;
   location?: ReviewFindingLocation;
   functionName?: string;
 }

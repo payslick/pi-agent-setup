@@ -1,9 +1,24 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { fetchLocalData, fetchPrData, fetchPrReviewComments, resolvePrNumber } from "./github.js";
 import { routeReviewLanes } from "./lanes.js";
+import {
+  filterReviewFiles,
+  filterReviewFindings,
+  filterReviewHunks,
+  filterReviewPatch,
+} from "../review-scope.ts";
 import { prepareDryRunPosting } from "./posting.js";
 import { laneIcon, renderExecutiveSummary } from "./summary.js";
-import { writeSharedReviewArtifacts } from "./artifacts.js";
-import { runCiAnalysisLaneAgent, runLaneAgent } from "./review-agents.js";
+import { getLaneDir, writeSharedReviewArtifacts } from "./artifacts.js";
+import {
+  readPartialReviewFindings,
+  reviewAgentInactivityTimeout,
+  reviewAgentTimeout,
+  runCiAnalysisLaneAgent,
+  runLaneAgent,
+} from "./review-agents.js";
 import { buildIssueConsolidations } from "./issues.js";
 import { buildReviewSkillCoverage, runCiWatcher } from "./review-ci.js";
 import {
@@ -70,44 +85,106 @@ async function fetchExistingReviewComments(pi, ctx, local, prNumber) {
   return flattenReviewComments(comments);
 }
 
-async function runReviewAgents(pi, ctx, input) {
-  const laneProgress = new Map(input.lanes.map((lane) => [lane.laneId, "waiting"]));
-  const updateProgress = (laneId, progress) => {
-    laneProgress.set(laneId, progress);
-    setStatus(ctx, formatReviewAgentProgress(input.lanes, laneProgress));
+function filterReviewData(prData) {
+  return {
+    ...prData,
+    files: filterReviewFiles(prData.files),
+    hunks: filterReviewHunks(prData.hunks),
+    patch: filterReviewPatch(prData.patch),
   };
-  setStatus(ctx, formatReviewAgentProgress(input.lanes, laneProgress));
-  let agentResults = input.noAgents
-    ? input.lanes.map((lane) => {
-        updateProgress(lane.laneId, "skipped");
-        return { laneId: lane.laneId, findings: [], error: "review agents skipped (--no-agents)" };
-      })
-    : await Promise.all(
-        input.lanes.map((lane) =>
-          runLaneAgent(pi, ctx, input.prData.metadata, lane, input.sharedArtifacts, (progress) =>
-            updateProgress(lane.laneId, progress),
-          ),
-        ),
-      );
-  const ciStatus = await input.ciStatusPromise;
-  if (!input.noAgents && ciStatus.status === "fail") {
-    const ciResult = await runCiAnalysisLaneAgent(
-      pi,
-      ctx,
-      input.prData.metadata,
-      ciStatus,
-      input.sharedArtifacts,
-    );
-    agentResults = [...agentResults, ciResult];
+}
+
+export async function runReviewAgentSafely(
+  laneId,
+  operation,
+  onError,
+  recoverFindings,
+) {
+  try {
+    return await operation();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const findings = recoverFindings ? await recoverFindings().catch(() => []) : [];
+    onError?.(message, findings.length);
+    return {
+      laneId,
+      findings,
+      partialFindingCount: findings.length,
+      error: message,
+    };
   }
-  return { agentResults, ciStatus };
+}
+
+async function runReviewAgents(pi, ctx, input) {
+  const progress = createReviewAgentProgress(ctx, input.lanes);
+  const ciStatusPromise = Promise.resolve(input.ciStatusPromise).catch((error) => ({
+    checked: false,
+    status: "unknown",
+    message: `CI status unavailable: ${error instanceof Error ? error.message : String(error)}`,
+  }));
+  try {
+    let agentResults = input.noAgents
+      ? input.lanes.map((lane) => {
+          progress.update(lane.laneId, "skipped");
+          return { laneId: lane.laneId, findings: [], error: "review agents skipped (--no-agents)" };
+        })
+      : await Promise.all(
+          input.lanes.map((lane) =>
+            runReviewAgentSafely(
+              lane.laneId,
+              () =>
+                runLaneAgent(
+                  pi,
+                  ctx,
+                  input.prData.metadata,
+                  lane,
+                  input.sharedArtifacts,
+                  (phase, details) => progress.update(lane.laneId, phase, details),
+                ),
+              (_message, findingCount) =>
+                progress.update(lane.laneId, "error", { findingCount }),
+              () =>
+                readPartialReviewFindings(
+                  path.join(ctx.cwd, getLaneDir(ctx, lane.laneId), "partial-findings.jsonl"),
+                  lane.laneId,
+                ),
+            ),
+          ),
+        );
+    const ciStatus = await ciStatusPromise;
+    if (!input.noAgents && ciStatus.status === "fail") {
+      const ciResult = await runReviewAgentSafely(
+        "ci-analysis",
+        () =>
+          runCiAnalysisLaneAgent(
+            pi,
+            ctx,
+            input.prData.metadata,
+            ciStatus,
+            input.sharedArtifacts,
+          ),
+        undefined,
+        () =>
+          readPartialReviewFindings(
+            path.join(ctx.cwd, getLaneDir(ctx, "ci-analysis"), "partial-findings.jsonl"),
+            "ci-analysis",
+          ),
+      );
+      agentResults = [...agentResults, ciResult];
+    }
+    return { agentResults, ciStatus };
+  } finally {
+    progress.stop();
+  }
 }
 
 export async function runReviewCommand(pi, ctx, args, local) {
   const options = parseReviewCommandOptions(args);
   setStatus(ctx, "⏳:loading");
   showWidget(ctx, [local ? "Preparing local review…" : "Preparing PR review…"]);
-  const prData = await loadReviewTarget(pi, ctx, local, options.positionalArguments);
+  const prData = filterReviewData(
+    await loadReviewTarget(pi, ctx, local, options.positionalArguments),
+  );
   if (!local) await prefixTmuxWindowTitleWithPrNumber(pi, ctx, prData.prNumber);
   const existingComments = await fetchExistingReviewComments(pi, ctx, local, prData.prNumber);
   const targetLabel = local ? `local:${prData.metadata.base.ref}` : `#${prData.prNumber}`;
@@ -125,7 +202,7 @@ export async function runReviewCommand(pi, ctx, args, local) {
     ciStatusPromise,
   });
   const agentErrors = agentResults.filter((result) => result.error);
-  const findings = agentResults.flatMap((result) => result.findings);
+  const findings = filterReviewFindings(agentResults.flatMap((result) => result.findings));
   const issueConsolidations = buildIssueConsolidations(findings);
   const reviewedLaneIds = agentResults
     .filter((result) => !result.error)
@@ -200,7 +277,14 @@ export async function runReviewCommand(pi, ctx, args, local) {
   await promptReviewNextAction(pi, ctx, reportPaths, summaryInput, options.selfReview);
 }
 
-async function promptReviewNextAction(pi, ctx, reportPaths, summaryInput, selfReview = false) {
+export async function promptReviewNextAction(
+  pi,
+  ctx,
+  reportPaths,
+  summaryInput,
+  selfReview = false,
+) {
+  if (!summaryInput.findings.length) return;
   if (!ctx.hasUI || !ctx.ui.select) return;
   const options = [
     "post critical/important comments",
@@ -281,10 +365,254 @@ function flattenReviewComments(reviewComments) {
   return [...uniqueComments.values()];
 }
 
-function formatReviewAgentProgress(lanes, progressByLane) {
-  return lanes
-    .map((lane) => `${laneIcon(lane.laneId)}:${progressByLane.get(lane.laneId) ?? "waiting"}`)
-    .join(" ");
+const TERMINAL_AGENT_PHASES = new Set(["done", "error", "skipped"]);
+const MESSAGE_COUNT_PHASES = new Set(["working", "finalizing"]);
+const MAX_PROGRESS_COLUMNS = 4;
+const PROGRESS_COLUMN_GAP = "  ";
+const TIMEOUT_WARNING_MS = 5 * 60_000;
+
+function elapsedLabel(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function progressElapsed(entry, now) {
+  if (!entry?.startedAt) return 0;
+  return (entry.finishedAt ?? now) - entry.startedAt;
+}
+
+function parseJsonLines(content) {
+  return content.split(/\r?\n/).flatMap((line) => {
+    if (!line.trim()) return [];
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function sessionMessageProgress(content) {
+  let messageCount = 0;
+  let lastMessageAt;
+  for (const entry of parseJsonLines(content)) {
+    if (entry?.type !== "message") continue;
+    messageCount += 1;
+    const timestamp =
+      typeof entry.timestamp === "number" ? entry.timestamp : Date.parse(entry.timestamp ?? "");
+    if (Number.isFinite(timestamp)) lastMessageAt = Math.max(lastMessageAt ?? timestamp, timestamp);
+  }
+  return { messageCount, lastMessageAt };
+}
+
+export function countSessionMessages(content) {
+  return sessionMessageProgress(content).messageCount;
+}
+
+export function countPartialFindings(content) {
+  const findingKeys = new Set();
+  for (const finding of parseJsonLines(content)) {
+    if (!finding || typeof finding !== "object" || typeof finding.path !== "string") continue;
+    findingKeys.add(`${finding.path}:${finding.line ?? ""}:${finding.title ?? ""}`);
+  }
+  return findingKeys.size;
+}
+
+async function readProgressCount(filePath, counter) {
+  if (!filePath) return undefined;
+  try {
+    return counter(await readFile(filePath, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+export function formatReviewAgentProgress(lanes, progressByLane, startedAt, now = Date.now()) {
+  const entries = lanes.map((lane) => progressByLane.get(lane.laneId));
+  const finished = entries.filter((entry) => TERMINAL_AGENT_PHASES.has(entry?.phase)).length;
+  const active = entries.filter(
+    (entry) => entry?.startedAt && !TERMINAL_AGENT_PHASES.has(entry.phase),
+  ).length;
+  const failed = entries.filter((entry) => entry?.phase === "error").length;
+  return `Review ${finished}/${lanes.length} • ${active} active • ${failed} failed • ${elapsedLabel(now - startedAt)}`;
+}
+
+function progressTimeoutRemaining(entry, timeout, inactivityTimeout, now) {
+  if (!entry.timeoutStartedAt) return timeout;
+  const deadline = Math.max(
+    entry.timeoutStartedAt + timeout,
+    entry.lastMessageAt
+      ? Math.min(entry.lastMessageAt, now) + inactivityTimeout
+      : Number.NEGATIVE_INFINITY,
+  );
+  return Math.max(0, deadline - now);
+}
+
+function progressCell(lane, entry, titleWidth, timeout, inactivityTimeout, now) {
+  const title = `${laneIcon(lane.laneId)} ${lane.title}`.padEnd(titleWidth);
+  const phase = entry.phase.padEnd(10);
+  const elapsed = entry.startedAt ? elapsedLabel(progressElapsed(entry, now)) : "--:--";
+  const messageCount = entry.messageCount ?? (entry.sessionPath ? 0 : "—");
+  const activity = MESSAGE_COUNT_PHASES.has(entry.phase)
+    ? `${elapsed}(${messageCount})`
+    : elapsed;
+  const fields = [`${title} ${phase} ${activity}`, `found:${entry.findingCount ?? 0}`];
+  const remaining = progressTimeoutRemaining(entry, timeout, inactivityTimeout, now);
+  if (!TERMINAL_AGENT_PHASES.has(entry.phase) && remaining <= TIMEOUT_WARNING_MS) {
+    fields.push(`timeout ${elapsedLabel(remaining)}`);
+  }
+  return fields.join("  ");
+}
+
+function padProgressCell(cell, width) {
+  return `${cell}${" ".repeat(Math.max(0, width - visibleWidth(cell)))}`;
+}
+
+function packProgressCells(cells, width) {
+  if (!cells.length) return [];
+  const requiredWidth = Math.max(...cells.map((cell) => visibleWidth(cell)));
+  const columnCount = Math.max(
+    1,
+    Math.min(
+      MAX_PROGRESS_COLUMNS,
+      cells.length,
+      Math.floor((width + PROGRESS_COLUMN_GAP.length) / (requiredWidth + PROGRESS_COLUMN_GAP.length)),
+    ),
+  );
+  if (columnCount === 1) return cells.flatMap((cell) => wrapTextWithAnsi(cell, width));
+  const lines = [];
+  for (let index = 0; index < cells.length; index += columnCount) {
+    const row = cells.slice(index, index + columnCount);
+    lines.push(
+      row
+        .map((cell, cellIndex) =>
+          cellIndex === row.length - 1 ? cell : padProgressCell(cell, requiredWidth),
+        )
+        .join(PROGRESS_COLUMN_GAP),
+    );
+  }
+  return lines;
+}
+
+export function formatReviewAgentProgressWidget(
+  lanes,
+  progressByLane,
+  startedAt,
+  timeout,
+  now = Date.now(),
+  width = 120,
+  inactivityTimeout = 600_000,
+) {
+  const titleWidth = Math.max(...lanes.map((lane) => visibleWidth(`${laneIcon(lane.laneId)} ${lane.title}`)), 1);
+  const cells = lanes.map((lane) =>
+    progressCell(
+      lane,
+      progressByLane.get(lane.laneId) ?? { phase: "waiting" },
+      titleWidth,
+      timeout,
+      inactivityTimeout,
+      now,
+    ),
+  );
+  return [
+    ...wrapTextWithAnsi(formatReviewAgentProgress(lanes, progressByLane, startedAt, now), width),
+    "",
+    ...packProgressCells(cells, width),
+  ];
+}
+
+export async function refreshReviewProgressCounts(progressByLane) {
+  await Promise.all(
+    [...progressByLane].map(async ([laneId, entry]) => {
+      if (TERMINAL_AGENT_PHASES.has(entry.phase)) return;
+      const [sessionProgress, findingCount] = await Promise.all([
+        MESSAGE_COUNT_PHASES.has(entry.phase)
+          ? readProgressCount(entry.sessionPath, sessionMessageProgress)
+          : undefined,
+        readProgressCount(entry.partialFindingsPath, countPartialFindings),
+      ]);
+      const current = progressByLane.get(laneId);
+      if (!current || TERMINAL_AGENT_PHASES.has(current.phase)) return;
+      progressByLane.set(laneId, {
+        ...current,
+        messageCount: sessionProgress?.messageCount ?? current.messageCount,
+        lastMessageAt: sessionProgress?.lastMessageAt ?? current.lastMessageAt,
+        findingCount: findingCount ?? current.findingCount,
+      });
+    }),
+  );
+}
+
+function createReviewAgentProgress(ctx, lanes) {
+  const startedAt = Date.now();
+  const timeout = reviewAgentTimeout();
+  const inactivityTimeout = reviewAgentInactivityTimeout();
+  const progressByLane = new Map(
+    lanes.map((lane) => [lane.laneId, { phase: "waiting", startedAt: undefined, finishedAt: undefined }]),
+  );
+  let requestWidgetRender;
+  let polling = false;
+  let stopped = false;
+  showWidget(ctx, (tui) => {
+    requestWidgetRender = () => tui.requestRender();
+    return {
+      dispose: () => (requestWidgetRender = undefined),
+      invalidate() {},
+      render: (width) =>
+        formatReviewAgentProgressWidget(
+          lanes,
+          progressByLane,
+          startedAt,
+          timeout,
+          Date.now(),
+          width,
+          inactivityTimeout,
+        ),
+    };
+  });
+  const render = () => {
+    setStatus(ctx, formatReviewAgentProgress(lanes, progressByLane, startedAt));
+    requestWidgetRender?.();
+  };
+  const poll = async () => {
+    if (polling || stopped) return;
+    polling = true;
+    await refreshReviewProgressCounts(progressByLane);
+    polling = false;
+    if (!stopped) render();
+  };
+  const update = (laneId, phase, details = {}) => {
+    const current = progressByLane.get(laneId) ?? { phase: "waiting" };
+    const now = Date.now();
+    progressByLane.set(laneId, {
+      ...current,
+      ...details,
+      phase,
+      startedAt: current.startedAt ?? (phase === "waiting" ? undefined : now),
+      timeoutStartedAt:
+        current.timeoutStartedAt ?? (phase === "working" ? now : undefined),
+      finishedAt: TERMINAL_AGENT_PHASES.has(phase) ? now : undefined,
+    });
+    render();
+    void poll();
+  };
+  render();
+  const timer = ctx.hasUI
+    ? setInterval(() => {
+        render();
+        void poll();
+      }, 1_000)
+    : undefined;
+  timer?.unref?.();
+  return {
+    update,
+    stop: () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      render();
+    },
+  };
 }
 
 function tokenizeArgs(args) {

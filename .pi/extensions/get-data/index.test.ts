@@ -86,52 +86,72 @@ describe("parent data-tool policy", () => {
     "web_search",
   ];
 
-  test("keeps direct reads and Bash in mode 1 while excluding get_data", () => {
-    expect(parentActiveTools([...directTools, GET_DATA_TOOL_NAME, "write"], 1)).toEqual([
+  test("exposes parent tools according to cumulative access-mode capabilities", () => {
+    const configured = [
       ...directTools,
+      GET_DATA_TOOL_NAME,
+      "write",
+      "debug_ui_start",
+      "custom-tool",
+    ];
+
+    expect(parentActiveTools(configured, 1)).toEqual([...directTools, "bash"]);
+    expect(parentActiveTools(configured, 2)).toEqual([
+      ...directTools,
+      GET_DATA_TOOL_NAME,
+      "write",
+      "bash",
+    ]);
+    expect(parentActiveTools(configured, 3)).toEqual([
+      ...directTools,
+      GET_DATA_TOOL_NAME,
+      "write",
+      "debug_ui_start",
       "bash",
     ]);
   });
 
-  test("keeps direct reads and get_data in modes 2 through 4", () => {
-    for (const mode of [2, 3, 4] as const) {
-      expect(parentActiveTools([...directTools, "write"], mode)).toEqual([
-        ...directTools,
-        "write",
-        GET_DATA_TOOL_NAME,
-        "bash",
-      ]);
-    }
+  test("keeps configured tools and required parent tools in mode 4", () => {
+    expect(parentActiveTools([...directTools, "write"], 4)).toEqual([
+      ...directTools,
+      "write",
+      GET_DATA_TOOL_NAME,
+      "bash",
+    ]);
   });
 
-  test("does not duplicate read or get_data", () => {
-    expect(parentActiveTools([GET_DATA_TOOL_NAME, "read", "edit"], 3)).toEqual([
+  test("does not duplicate required parent tools", () => {
+    expect(parentActiveTools([GET_DATA_TOOL_NAME, "read", "bash"], 3)).toEqual([
       GET_DATA_TOOL_NAME,
       "read",
-      "edit",
       "bash",
     ]);
   });
 });
 
 describe("parent prompt guidance", () => {
-  test("is mode-aware, replaceable, and does not mandate get_data", () => {
+  test("is mode-aware, cumulative, and replaceable", () => {
     const modeOne = appendGetDataInstructions("base prompt", 1);
-    const modeThree = appendGetDataInstructions(modeOne, 3);
-    const unchanged = appendGetDataInstructions(modeThree, 3);
+    const modeTwo = appendGetDataInstructions(modeOne, 2);
+    const modeThree = appendGetDataInstructions(modeTwo, 3);
+    const modeFour = appendGetDataInstructions(modeThree, 4);
+    const unchanged = appendGetDataInstructions(modeFour, 4);
 
     expect(modeOne).toContain("Access mode 1");
     expect(modeOne).toContain("`get_data` is unavailable in mode 1");
     expect(modeOne).toContain("text and image reads");
     expect(modeOne).toContain('Bash is available only with `action="read"`');
     expect(modeOne).toContain("cannot change to an external directory");
+    expect(modeTwo).toContain("Access mode 2");
+    expect(modeTwo).toContain("`get_data` is an optional delegation tool");
+    expect(modeTwo).toContain("Direct read/data tools remain available");
+    expect(modeTwo).not.toContain("Access mode 1");
     expect(modeThree).toContain("Access mode 3");
     expect(modeThree).toContain("`get_data` is an optional delegation tool");
-    expect(modeThree).toContain("Direct read/data tools remain available");
-    expect(modeThree).not.toContain("Access mode 1");
-    expect(modeThree).not.toContain("You MUST use `get_data`");
-    expect(modeThree).not.toContain("only mechanism");
-    expect(unchanged).toBe(modeThree);
+    expect(modeThree).not.toContain("Access mode 2");
+    expect(modeFour).toContain("Access mode 4");
+    expect(modeFour).toContain("`get_data` is an optional delegation tool");
+    expect(unchanged).toBe(modeFour);
   });
 });
 
@@ -206,15 +226,15 @@ describe("child extension isolation", () => {
 });
 
 describe("child model defaults", () => {
-  test("uses Sol with low thinking independently of the parent defaults", () => {
+  test("uses Luna with minimal thinking independently of the parent defaults", () => {
     expect(childModelArgs()).toEqual([
       "--model",
       GET_DATA_CHILD_MODEL,
       "--thinking",
       GET_DATA_CHILD_THINKING,
     ]);
-    expect(GET_DATA_CHILD_MODEL).toBe("openai-codex/gpt-5.6-sol");
-    expect(GET_DATA_CHILD_THINKING).toBe("low");
+    expect(GET_DATA_CHILD_MODEL).toBe("openai-codex/gpt-5.6-luna");
+    expect(GET_DATA_CHILD_THINKING).toBe("minimal");
   });
 });
 

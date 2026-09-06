@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Review the PR"}]}}
+{"type":"message","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"{\"findings\":[]}"}]}}

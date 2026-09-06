@@ -1,5 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+export const REVIEW_AGENT_PROMPT_COMMAND = "run-pr-review-lane";
+export const REVIEW_AGENT_PARTIAL_FINDING_TOOL = "report_pr_review_finding";
 
 export function getReviewSessionDir(ctx) {
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
@@ -83,21 +86,96 @@ function sharedReviewReadme(sessionId, sharedDir) {
     "- `review-agent-tool-guard.ts` — tool-call guard loaded into lane-agent Pi processes.",
     "",
     "## Tool/edit rules",
-    "- Bash is intentionally unavailable to lane agents.",
-    "- Lane agents may use read/read-many-files-lines, web tools, and project_index tools.",
+    "- Every lane agent may use get_data for bounded, read-only investigation.",
+    "- Additional read, web, and project_index tools may be enabled for lane agents.",
+    "- Bash is unavailable except to ci-analysis, where a guard permits only direct, read-only gh pr checks, gh run list, and gh run view calls.",
     `- Lane agents may edit only their own lane directory under \`tmp/${sessionId}/<lane>\` or this shared directory: \`${sharedDir}\`.`,
     "",
   ].join("\n");
 }
 
-export function reviewAgentToolGuardSource(laneDir, sharedDir) {
+export function isAllowedCiAnalysisBashCall(input) {
+  if (!input || input.action !== "read" || typeof input.command !== "string") return false;
+  const command = input.command.trim();
+  if (!/^gh\s+(?:pr\s+checks|run\s+(?:list|view))(?:\s|$)/.test(command)) return false;
+  return !/[\r\n;&|<>`$(){}]/.test(command);
+}
+
+export function reviewAgentToolGuardSource(laneDir, sharedDir, options = {}) {
+  const allowCiAnalysisGhBash = options.allowCiAnalysisGhBash === true;
+  const promptFile = typeof options.promptFile === "string" ? options.promptFile : undefined;
+  const partialFindingsFile =
+    typeof options.partialFindingsFile === "string" ? options.partialFindingsFile : undefined;
   return [
+    'import { appendFile, readFile } from "node:fs/promises";',
     'import path from "node:path";',
     "",
+    `const allowCiAnalysisGhBash = ${JSON.stringify(allowCiAnalysisGhBash)};`,
+    `const isAllowedCiAnalysisBashCall = ${isAllowedCiAnalysisBashCall.toString()};`,
+    "",
     "export default function reviewAgentToolGuard(pi) {",
+    ...(promptFile
+      ? [
+          `  pi.registerCommand(${JSON.stringify(REVIEW_AGENT_PROMPT_COMMAND)}, {`,
+          '    description: "Run the generated PR review lane prompt",',
+          "    handler: async (_args, ctx) => {",
+          `      const prompt = await readFile(path.resolve(ctx.cwd, ${JSON.stringify(promptFile)}), "utf8");`,
+          "      await pi.sendUserMessage(prompt);",
+          "    },",
+          "  });",
+          "",
+        ]
+      : []),
+    ...(partialFindingsFile
+      ? [
+          `  pi.registerTool({`,
+          `    name: ${JSON.stringify(REVIEW_AGENT_PARTIAL_FINDING_TOOL)},`,
+          '    label: "Record review finding",',
+          '    description: "Append one confirmed, final-quality finding to the lane partial-results artifact.",',
+          '    promptSnippet: "Record a confirmed PR review finding immediately for live progress.",',
+          '    promptGuidelines: ["Before requesting more evidence, record every finding that already meets the reporting threshold. Do not defer confirmed findings until the final response."],',
+          '    parameters: { type: "object", additionalProperties: false,',
+          '      required: ["severity", "type", "path", "line", "title", "body"],',
+          "      properties: {",
+          '        severity: { type: "string" },',
+          '        type: { type: "string" },',
+          '        path: { type: "string" },',
+          '        line: { type: "integer", minimum: 1 },',
+          '        startLine: { type: "integer", minimum: 1 },',
+          '        endLine: { type: "integer", minimum: 1 },',
+          '        functionName: { type: "string" },',
+          '        title: { type: "string" },',
+          '        body: { type: "string" },',
+          '        confidence: { type: "number" },',
+          '        replacement: { type: "string" },',
+          '        example: { type: "object", additionalProperties: false, required: ["code"],',
+          '          properties: { language: { type: "string" }, code: { type: "string" } } },',
+          "      },",
+          "    },",
+          "    execute: async (_toolCallId, finding, _signal, _onUpdate, ctx) => {",
+          '      if (/^(?:\\.\\/)?drizzle(?:\\/|$)/i.test(finding.path.trim())) {',
+          '        return { content: [{ type: "text", text: "Files under drizzle/ are outside review scope." }], isError: true };',
+          "      }",
+          `      const outputPath = path.resolve(ctx.cwd, ${JSON.stringify(partialFindingsFile)});`,
+          '      await appendFile(outputPath, `${JSON.stringify(finding)}\\n`, "utf8");',
+          '      return { content: [{ type: "text", text: "Confirmed finding recorded for live progress." }] };',
+          "    },",
+          "  });",
+          "",
+        ]
+      : []),
     '  pi.on("tool_call", (event, ctx) => {',
-    '    if (!["edit", "write", "multi-edit"].includes(event.toolName)) return;',
     "    const input = event.input || {};",
+    '    if (event.toolName === "bash") {',
+    "      if (!allowCiAnalysisGhBash) {",
+    '        return { block: true, reason: "Bash is unavailable to this PR review lane." };',
+    "      }",
+    "      if (!isAllowedCiAnalysisBashCall(input)) {",
+    '        return { block: true, reason: "CI-analysis Bash permits only one direct, read-only gh pr checks, gh run list, or gh run view command without shell operators." };',
+    "      }",
+    "      return;",
+    "    }",
+    '    if (!["edit", "write", "multi-edit"].includes(event.toolName)) return;',
     '    const rawPaths = event.toolName === "multi-edit"',
     "      ? (Array.isArray(input.files) ? input.files.map((file) => file && file.path) : [])",
     "      : [input.path];",
@@ -125,11 +203,11 @@ function laneAgentArtifactDir(ctx, laneId) {
   return { absolute: path.join(ctx.cwd, relative), relative };
 }
 
-async function writeLaneAgentArtifact(ctx, laneId, fileName, content) {
+async function writeLaneAgentArtifact(ctx, laneId, fileName, content, append = false) {
   const artifactDir = laneAgentArtifactDir(ctx, laneId);
   await mkdir(artifactDir.absolute, { recursive: true });
   const filePath = path.join(artifactDir.absolute, fileName.replace(/[^a-z0-9._-]+/gi, "-"));
-  await writeFile(filePath, content, "utf8");
+  await (append ? appendFile : writeFile)(filePath, content, "utf8");
   return relativePath(ctx.cwd, filePath);
 }
 
@@ -140,7 +218,11 @@ export async function createLaneArtifactWriter(ctx, laneId) {
     artifactDir: laneAgentArtifactDir(ctx, laneId).relative,
     write: async (fileName, content) => {
       const artifactPath = await writeLaneAgentArtifact(ctx, laneId, fileName, content);
-      artifactFiles.push(artifactPath);
+      if (!artifactFiles.includes(artifactPath)) artifactFiles.push(artifactPath);
+    },
+    append: async (fileName, content) => {
+      const artifactPath = await writeLaneAgentArtifact(ctx, laneId, fileName, content, true);
+      if (!artifactFiles.includes(artifactPath)) artifactFiles.push(artifactPath);
     },
   };
 }

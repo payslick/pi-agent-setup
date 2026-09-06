@@ -29,11 +29,11 @@ import {
 } from "../access-mode/state";
 
 export const GET_DATA_TOOL_NAME = "get_data";
-export const GET_DATA_CHILD_MODEL = "openai-codex/gpt-5.6-sol";
-export const GET_DATA_CHILD_THINKING = "low";
+export const GET_DATA_CHILD_MODEL = "openai-codex/gpt-5.6-luna";
+export const GET_DATA_CHILD_THINKING = "minimal";
 const STATUS_KEY = "get-data";
 const CHILD_ENV_KEY = "PI_GET_DATA_CHILD";
-const DEFAULT_PARENT_CONTEXT_CHARS = 80_000;
+const DEFAULT_PARENT_CONTEXT_CHARS = 16_000;
 const DEFAULT_CHILD_TIMEOUT_MS = 10 * 60_000;
 const PROMPT_MARKER = "Parent data-acquisition boundary:";
 const PROMPT_END_MARKER = "<!-- pi-get-data:end -->";

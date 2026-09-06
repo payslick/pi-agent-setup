@@ -40,7 +40,7 @@ The operations answer different structural questions:
 
 `count` is the number of returned matches. `complete: true` means the selected scope was searched exhaustively without result truncation, so `count` is the exact total. `complete: false` means the result set was truncated or the search could not cover the full scope; `count` is then only a lower bound. Increase `maxResults` or narrow `scope` before reporting an exact count.
 
-Use symbol mode for exact definition, reference, calling-function, using-function, and count questions. Ranked source/debug modes remain appropriate for conceptual discovery.
+Use symbol mode for exact definition, reference, calling-function, using-function, and count questions. Ranked source/debug modes remain appropriate for conceptual discovery. Native symbol analyses for the same canonical project root are serialized, candidate identifiers are filtered before symbol resolution, and each analysis has a hard timeout. While one is active, the footer reports `index:analyzing <symbol>` rather than `index:ready`.
 
 Root-level and nested `test`, `tests`, and `__tests__` directories are classified as tests, as are common JavaScript/TypeScript test suffixes and Python test names. Root-level and nested `doc`, `docs`, and `prd` directories, README files, Markdown, and MDX are classified as documentation.
 
@@ -76,6 +76,7 @@ All limits are positive integers, are enforced on every reconciliation, and may 
 | Bytes per file | `PI_PROJECT_INDEX_MAX_READ_BYTES` | 300,000 | 5,000,000 |
 | Aggregate accepted bytes | `PI_PROJECT_INDEX_MAX_TOTAL_READ_BYTES` | 67,108,864 | 536,870,912 |
 | Concurrent file reads | `PI_PROJECT_INDEX_READ_CONCURRENCY` | 8 | 32 |
+| Native symbol analysis duration (milliseconds) | `PI_PROJECT_INDEX_SYMBOL_TIMEOUT_MS` | 60,000 | 600,000 |
 
 Invalid, non-finite, non-positive, or sub-integer values fall back to the documented default; values over the hard maximum are clamped. Traversal and reads check tool cancellation, and reads use bounded concurrency.
 

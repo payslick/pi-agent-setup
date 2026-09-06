@@ -10,7 +10,7 @@ export function prepareDryRunPosting(input) {
   const replies = [];
   const skippedFindings = [];
   const postingFindings = consolidatePostingFindings(
-    input.findings,
+    input.findings.filter((finding) => finding.partial !== true),
     input.issueConsolidations ?? [],
   );
   for (const { finding, reviewTypes } of postingFindings) {

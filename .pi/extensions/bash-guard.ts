@@ -24,7 +24,9 @@ type ToolResultPatch = {
 const BASH_ACCESS_ERROR = "The current access mode blocks Bash execution.";
 const WORKDIR_ERROR =
   "work only in the current dir, never use `cd ..`, `cd /`, `git -C`, or other directory-changing tricks";
-const PYTHON_ERROR = "never use ad hoc python: use jq to parse json, use bun to run js";
+const AD_HOC_SCRIPT_ERROR = `Blocked: ad hoc interpreter scripts are not allowed when dedicated tools or simple commands can perform the task.
+The command was not run and no files were changed. Do not retry it in Python, JavaScript/TypeScript, Bun, Node, Ruby, Perl, AWK, shell, another language, a heredoc, or a temporary script.
+Use structured read/search tools, \`rg\` for searching and filtering, \`jq\` for JSON, \`multi-edit\` for existing-file changes, or an existing checked-in project command.`;
 const DEV_SERVER_ERROR = "never run the dev server; use `bun scripts/find-port.ts --wait` instead";
 const EXTENSION_FAILURE_ERROR = "bash guard extension failed";
 const EXIT_CODE_ONE = "Exit code: 1";
@@ -36,7 +38,7 @@ const FIND_RG_GUIDANCE =
   "Example: `rg --files --hidden --no-ignore . -g '*.ts' -g '!node_modules/**'`. Do not retry the `find` command.";
 
 export interface RuleViolation {
-  rule: "access-mode" | "workdir" | "python" | "dev-server";
+  rule: "access-mode" | "workdir" | "ad-hoc-script" | "dev-server";
   detail: string;
 }
 
@@ -78,6 +80,23 @@ export class SearchRewriteError extends Error {
 const shellOperators = new Set([";", "&", "|", "(", ")", "<", ">", "\n"]);
 const commandBreakers = new Set([";", "&&", "||", "|", "(", ")", "&", "<", ">", "\n"]);
 const pythonCommands = new Set(["python", "python3", "python2", "pythonw", "pypy", "pypy3", "py"]);
+const shellCommands = new Set(["bash", "dash", "fish", "ksh", "sh", "zsh"]);
+const pythonInlineFlags = new Set(["-c"]);
+const shellInlineFlags = new Set(["-c"]);
+const inlineFlagCommands = new Map<string, Set<string>>([
+  ["node", new Set(["-e", "--eval", "-p", "--print"])],
+  ["bun", new Set(["-e", "--eval", "-p", "--print"])],
+  ["tsx", new Set(["-e", "--eval", "-p", "--print"])],
+  ["ts-node", new Set(["-e", "--eval", "-p", "--print"])],
+  ["ruby", new Set(["-e"])],
+  ["perl", new Set(["-e", "-E"])],
+  ["php", new Set(["-r"])],
+  ["lua", new Set(["-e"])],
+  ["r", new Set(["-e", "--expr"])],
+  ["rscript", new Set(["-e", "--expr"])],
+]);
+const interpreterInfoFlags = new Set(["-h", "--help", "-v", "-V", "--version"]);
+const temporaryScriptPathPattern = /(?:^|\/)(?:\.pi\/tmp|tmp|temp)\//i;
 const devPackageManagers = new Set(["npm", "pnpm", "yarn"]);
 const devFrameworkCommands = new Set(["next", "vite", "nuxt", "astro", "remix"]);
 const pathOptionNames = new Set([
@@ -518,7 +537,17 @@ function isPythonCommand(word: string): boolean {
   return pythonCommands.has(command) || /^python\d+(?:\.\d+)?$/.test(command);
 }
 
-function unwrapCommandWrapper(words: string[]): string[] {
+function isScriptInterpreterCommand(word: string): boolean {
+  const command = normalizeCommandName(word);
+  return (
+    isPythonCommand(command) ||
+    shellCommands.has(command) ||
+    inlineFlagCommands.has(command) ||
+    ["awk", "gawk", "mawk", "nawk", "deno"].includes(command)
+  );
+}
+
+function unwrapOneCommandWrapper(words: string[]): string[] {
   const runnableWords = stripLeadingAssignments(words);
   const first = normalizeCommandName(runnableWords[0] ?? "");
 
@@ -527,6 +556,10 @@ function unwrapCommandWrapper(words: string[]): string[] {
   if (["uv", "poetry", "pipenv", "rye", "hatch"].includes(first) && runnableWords[1] === "run") {
     return runnableWords.slice(2);
   }
+
+  if (["npx", "bunx"].includes(first)) return runnableWords.slice(1);
+  if (["npm", "pnpm", "yarn"].includes(first) && ["exec", "dlx"].includes(runnableWords[1] ?? ""))
+    return runnableWords.slice(runnableWords[2] === "--" ? 3 : 2);
 
   if (first === "env") {
     const commandIndex = runnableWords.findIndex((word, index) => {
@@ -539,7 +572,7 @@ function unwrapCommandWrapper(words: string[]): string[] {
 
   if (first === "xargs") {
     const commandIndex = runnableWords.findIndex(
-      (word, index) => index > 0 && isPythonCommand(word),
+      (word, index) => index > 0 && isScriptInterpreterCommand(word),
     );
     return commandIndex === -1 ? runnableWords : runnableWords.slice(commandIndex);
   }
@@ -547,18 +580,75 @@ function unwrapCommandWrapper(words: string[]): string[] {
   return runnableWords;
 }
 
-function hasRawPythonTrick(command: string): boolean {
-  return /(?:^|[\s;&|])(?:bash|sh|zsh|fish|env)\s+[^\n;&|]*\b(?:python\d*(?:\.\d+)?|pythonw|pypy\d?|py)\b/i.test(
+function unwrapCommandWrappers(words: string[]): string[] {
+  let current = stripLeadingAssignments(words);
+  while (current.length > 0) {
+    const unwrapped = unwrapOneCommandWrapper(current);
+    if (unwrapped.length === current.length && unwrapped.every((word, index) => word === current[index]))
+      return current;
+    current = unwrapped;
+  }
+  return current;
+}
+
+function hasInlineFlag(args: string[], flags: Set<string>): boolean {
+  return args.some((arg) => {
+    if (flags.has(arg)) return true;
+    return [...flags].some((flag) => {
+      if (!flag.startsWith("-") || flag.startsWith("--")) return false;
+      return (
+        arg.startsWith(flag) ||
+        (flag.length === 2 && arg.startsWith("-") && !arg.startsWith("--") && arg.slice(1).includes(flag[1] ?? ""))
+      );
+    });
+  });
+}
+
+function isInformationalInvocation(args: string[]): boolean {
+  return args.length > 0 && args.every((arg) => interpreterInfoFlags.has(arg));
+}
+
+function hasTemporaryScriptPath(args: string[]): boolean {
+  return args.some((arg) => temporaryScriptPathPattern.test(arg));
+}
+
+function isAdHocInterpreterInvocation(words: string[]): boolean {
+  const runnableWords = unwrapCommandWrappers(words);
+  const command = normalizeCommandName(runnableWords[0] ?? "");
+  const args = runnableWords.slice(1);
+  if (!isScriptInterpreterCommand(command)) return false;
+  if (hasTemporaryScriptPath(args)) return true;
+
+  if (isPythonCommand(command)) {
+    if (args.includes("-") || hasInlineFlag(args, pythonInlineFlags)) return true;
+    return args.length === 0;
+  }
+  if (shellCommands.has(command)) {
+    if (args.includes("-s") || hasInlineFlag(args, shellInlineFlags)) return true;
+    return args.length === 0;
+  }
+  if (command === "deno") return args[0] === "eval";
+  if (["awk", "gawk", "mawk", "nawk"].includes(command)) {
+    if (isInformationalInvocation(args)) return false;
+    return !args.includes("-f");
+  }
+
+  const inlineFlags = inlineFlagCommands.get(command);
+  if (!inlineFlags) return false;
+  if (args.includes("-") || hasInlineFlag(args, inlineFlags)) return true;
+  return args.length === 0;
+}
+
+function hasInterpreterHeredoc(command: string): boolean {
+  return /(?:^|[\s;&|])(?:python\d*(?:\.\d+)?|pythonw|pypy\d?|py|node|bun|tsx|ts-node|deno|ruby|perl|php|lua|rscript|r|bash|dash|fish|ksh|sh|zsh)(?:\s+[^\n;&|]*)?\s*<</i.test(
     command,
   );
 }
 
-function hasPythonUsage(command: string, tokens: ShellToken[]): boolean {
+function hasAdHocScriptUsage(command: string, tokens: ShellToken[]): boolean {
   return (
-    hasRawPythonTrick(command) ||
-    commandSegments(tokens).some((segment) =>
-      isPythonCommand(unwrapCommandWrapper(segment)[0] ?? ""),
-    )
+    hasInterpreterHeredoc(command) ||
+    commandSegments(tokens).some((segment) => isAdHocInterpreterInvocation(segment))
   );
 }
 
@@ -730,8 +820,8 @@ export function analyzeBashCommand(
     return { rule: "workdir", detail: WORKDIR_ERROR };
   }
 
-  if (hasPythonUsage(command, tokens)) {
-    return { rule: "python", detail: PYTHON_ERROR };
+  if (hasAdHocScriptUsage(command, tokens)) {
+    return { rule: "ad-hoc-script", detail: AD_HOC_SCRIPT_ERROR };
   }
 
   if (hasDevServerUsage(command, tokens)) {

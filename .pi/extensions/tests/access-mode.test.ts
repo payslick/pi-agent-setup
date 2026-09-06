@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -8,7 +8,10 @@ import accessModeExtension, { appendAccessModeInstructions } from "../access-mod
 import { assertProjectPath, projectPathIsAllowed } from "../access-mode/path-policy";
 import {
   accessModeStatus,
+  clearAccessProjectRoot,
   DEFAULT_ACCESS_MODE,
+  discoverAccessProjectRoot,
+  initializeAccessProjectRoot,
   nextAccessMode,
   previousAccessMode,
   setAccessMode,
@@ -23,6 +26,7 @@ const temporaryPaths = new Set<string>();
 
 afterEach(async () => {
   setAccessMode(DEFAULT_ACCESS_MODE);
+  clearAccessProjectRoot();
   await Promise.all(
     [...temporaryPaths].map((temporaryPath) => rm(temporaryPath, { recursive: true, force: true })),
   );
@@ -30,6 +34,28 @@ afterEach(async () => {
 });
 
 describe("access mode state", () => {
+  test("uses the nearest ancestor containing a .piroot file", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "access-mode-workspace-"));
+    const project = path.join(workspace, "app", "wt", "feature");
+    temporaryPaths.add(workspace);
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(workspace, ".piroot"), "", "utf8");
+
+    expect(discoverAccessProjectRoot(project)).toBe(workspace);
+
+    const nearerRoot = path.join(workspace, "app");
+    await writeFile(path.join(nearerRoot, ".piroot"), "", "utf8");
+    expect(discoverAccessProjectRoot(project)).toBe(nearerRoot);
+  });
+
+  test("uses the current directory when no .piroot file exists", async () => {
+    const project = await mkdtemp(path.join(tmpdir(), "access-mode-project-"));
+    temporaryPaths.add(project);
+
+    expect(discoverAccessProjectRoot(project)).toBe(project);
+    expect(initializeAccessProjectRoot(project)).toBe(project);
+  });
+
   test("formats compact footer indications", () => {
     expect([1, 2, 3, 4].map((mode) => accessModeStatus(mode as 1 | 2 | 3 | 4))).toEqual([
       "1: r",
@@ -48,15 +74,18 @@ describe("access mode state", () => {
 });
 
 describe("access mode tool policy", () => {
-  const tools = ["read", "get_data", "write", "multi-edit", "bash", "custom-tool"];
+  const tools = [
+    "read",
+    "get_data",
+    "write",
+    "multi-edit",
+    "bash",
+    "debug_ui_start",
+    "custom-tool",
+  ];
 
-  test("uses direct reads and read-action Bash without get_data in mode 1", () => {
+  test("exposes cumulative read, write, and execute capabilities", () => {
     expect(filterToolsForAccessMode(tools, 1)).toEqual(["read", "bash"]);
-    expect(isBashActionAllowed("read", 1)).toBe(true);
-    expect(isBashActionAllowed("write", 1)).toBe(false);
-  });
-
-  test("adds writes and execution cumulatively", () => {
     expect(filterToolsForAccessMode(tools, 2)).toEqual([
       "read",
       "get_data",
@@ -64,15 +93,21 @@ describe("access mode tool policy", () => {
       "multi-edit",
       "bash",
     ]);
-    expect(isBashActionAllowed("read", 2)).toBe(true);
-    expect(isBashActionAllowed("write", 2)).toBe(true);
     expect(filterToolsForAccessMode(tools, 3)).toEqual([
       "read",
       "get_data",
       "write",
       "multi-edit",
       "bash",
+      "debug_ui_start",
     ]);
+
+    expect(isToolAllowed("get_data", 1)).toBe(false);
+    expect(isToolAllowed("get_data", 2)).toBe(true);
+    expect(isToolAllowed("write", 1)).toBe(false);
+    expect(isToolAllowed("write", 2)).toBe(true);
+    expect(isToolAllowed("debug_ui_start", 2)).toBe(false);
+    expect(isToolAllowed("debug_ui_start", 3)).toBe(true);
   });
 
   test("allows unknown tools only in mode 4", () => {
@@ -82,6 +117,25 @@ describe("access mode tool policy", () => {
 });
 
 describe("access mode project paths", () => {
+  test("allows symlinks whose targets remain inside the discovered .piroot boundary", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "access-mode-workspace-"));
+    const worktree = path.join(workspace, "app", "wt", "feature");
+    const sharedPi = path.join(workspace, "pi", ".pi");
+    const skillFile = path.join(sharedPi, "skills", "wayfinder", "SKILL.md");
+    temporaryPaths.add(workspace);
+    await mkdir(worktree, { recursive: true });
+    await mkdir(path.dirname(skillFile), { recursive: true });
+    await writeFile(path.join(workspace, ".piroot"), "", "utf8");
+    await writeFile(skillFile, "# Wayfinder\n", "utf8");
+    await symlink(sharedPi, path.join(worktree, ".pi"));
+
+    const projectRoot = initializeAccessProjectRoot(worktree);
+    expect(projectRoot).toBe(workspace);
+    await expect(
+      assertProjectPath(projectRoot, path.join(worktree, ".pi/skills/wayfinder/SKILL.md"), 3),
+    ).resolves.toBeUndefined();
+  });
+
   test("rejects lexical and symlink escapes until mode 4", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "access-mode-root-"));
     const outside = await mkdtemp(path.join(tmpdir(), "access-mode-outside-"));
@@ -118,7 +172,17 @@ describe("access mode extension enforcement", () => {
     temporaryPaths.add(root);
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const statuses = new Map<string, string | undefined>();
-    const allTools = ["read", "grep", "get_data", "write", "multi-edit", "bash", "edit", "custom"];
+    const allTools = [
+      "read",
+      "grep",
+      "get_data",
+      "write",
+      "multi-edit",
+      "bash",
+      "debug_ui_start",
+      "edit",
+      "custom",
+    ];
     let activeTools = [...allTools];
     const pi = {
       on(event: string, handler: (...args: unknown[]) => unknown) {
@@ -149,43 +213,70 @@ describe("access mode extension enforcement", () => {
     handlers.get("session_start")?.({}, ctx);
     expect(activeTools).toEqual(["read", "grep", "bash"]);
     expect(statuses.get("access-mode")).toBe("1: r");
-    const readBash = await handlers.get("tool_call")?.(
-      {
-        toolName: "bash",
-        input: { action: "read", purpose: "Inspect files", command: "ls" },
-        toolCallId: "bash-read-1",
-      },
+    const allowedRead = await handlers.get("tool_call")?.(
+      { toolName: "read", input: { path: "inside.txt" }, toolCallId: "read-1" },
       ctx,
     );
-    const writeBash = await handlers.get("tool_call")?.(
+    expect(allowedRead).toBeUndefined();
+    const blockedWriteBash = await handlers.get("tool_call")?.(
       {
         toolName: "bash",
-        input: { action: "write", purpose: "Create file", command: "touch output" },
+        input: { action: "write", purpose: "Create file", command: "touch inside.txt" },
         toolCallId: "bash-write-1",
       },
       ctx,
     );
-    expect(readBash).toBeUndefined();
-    expect(writeBash).toMatchObject({ block: true });
+    expect(blockedWriteBash).toMatchObject({ block: true });
 
     setAccessMode(2);
-    const modeTwoWriteBash = await handlers.get("tool_call")?.(
+    expect(activeTools).toEqual(["read", "grep", "get_data", "write", "multi-edit", "bash"]);
+    const allowedWriteBash = await handlers.get("tool_call")?.(
       {
         toolName: "bash",
-        input: { action: "write", purpose: "Create file", command: "touch output" },
+        input: { action: "write", purpose: "Create file", command: "touch inside.txt" },
         toolCallId: "bash-write-2",
       },
       ctx,
     );
-    expect(modeTwoWriteBash).toBeUndefined();
-
-    setAccessMode(3);
-    expect(activeTools).toEqual(["read", "grep", "get_data", "write", "multi-edit", "bash"]);
-    const blocked = await handlers.get("tool_call")?.(
-      { toolName: "custom", input: {}, toolCallId: "custom-1" },
+    expect(allowedWriteBash).toBeUndefined();
+    const blockedExecute = await handlers.get("tool_call")?.(
+      { toolName: "debug_ui_start", input: {}, toolCallId: "debug-2" },
       ctx,
     );
-    expect(blocked).toMatchObject({ block: true });
+    expect(blockedExecute).toMatchObject({ block: true });
+
+    setAccessMode(3);
+    expect(activeTools).toEqual([
+      "read",
+      "grep",
+      "get_data",
+      "write",
+      "multi-edit",
+      "bash",
+      "debug_ui_start",
+    ]);
+    const allowedExecute = await handlers.get("tool_call")?.(
+      { toolName: "debug_ui_start", input: {}, toolCallId: "debug-3" },
+      ctx,
+    );
+    expect(allowedExecute).toBeUndefined();
+
+    setAccessMode(4);
+    expect(activeTools).toEqual([
+      "read",
+      "grep",
+      "get_data",
+      "write",
+      "multi-edit",
+      "bash",
+      "debug_ui_start",
+      "custom",
+    ]);
+    const allowed = await handlers.get("tool_call")?.(
+      { toolName: "custom", input: {}, toolCallId: "custom-4" },
+      ctx,
+    );
+    expect(allowed).toBeUndefined();
 
     handlers.get("session_shutdown")?.({}, ctx);
   });

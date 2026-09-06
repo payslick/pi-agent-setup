@@ -14,6 +14,31 @@ export function parseAgentFindings(stdout, laneId) {
   });
 }
 
+export function parsePartialAgentFindings(content, laneId) {
+  const findings = [];
+  const findingKeys = new Set();
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const finding = normalizeFinding(value, laneId, findings.length);
+    if (!finding) continue;
+    const key = [
+      finding.location?.filePath ?? "",
+      finding.location?.line ?? finding.location?.startLine ?? "",
+      finding.title,
+    ].join(":");
+    if (findingKeys.has(key)) continue;
+    findingKeys.add(key);
+    findings.push({ ...finding, partial: true });
+  }
+  return findings;
+}
+
 export function parseAgentJson(stdout) {
   const trimmedOutput = stripAnsi(stdout).trim();
   if (!trimmedOutput) return { findings: [] };

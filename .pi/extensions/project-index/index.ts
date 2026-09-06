@@ -5,11 +5,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resolveAccessPath } from "../access-mode/path-policy";
 import { canAccessHostPaths, getAccessProjectRoot } from "../access-mode/state";
 import {
-  analyzeNativeSymbol,
   closeNativeSymbolAnalyzers,
   type NativeSymbolOperation,
   type NativeSymbolScope,
 } from "./native-symbols";
+import { nativeSymbolTimeoutMs, runNativeSymbolAnalysis } from "./native-symbol-runner";
 import {
   impactSchema,
   type ImpactInput,
@@ -48,7 +48,6 @@ const limits = {
   ),
   readConcurrency: positiveIntegerEnv("PI_PROJECT_INDEX_READ_CONCURRENCY", 8, 32),
 } as const;
-
 type ImpactCategory = "API" | "Pages" | "Tests" | "Docs" | "Other";
 interface SearchHit extends IndexedFile {
   score: number;
@@ -907,13 +906,13 @@ function registerSearchTool(pi: ExtensionAPI): void {
     parameters: searchSchema,
     async execute(_toolCallId, params: SearchInput, signal, _onUpdate, ctx) {
       const scanResult = await scan(ctx.cwd, params.root, false, signal);
-      updateIndexStatus(ctx, scanResult);
+      if (params.mode !== "symbol") updateIndexStatus(ctx, scanResult);
       if (params.mode === "symbol") {
         const symbol = params.symbol?.trim();
         if (!symbol) throw new Error("Symbol mode requires a non-empty symbol.");
         const operation = (params.operation ?? "usingFunctions") as NativeSymbolOperation;
         const scope = (params.scope ?? "all") as NativeSymbolScope;
-        const analysis = await analyzeNativeSymbol({
+        const analysis = await runNativeSymbolAnalysis({
           root: scanResult.root,
           rootLabel: scanResult.rootLabel,
           symbol,
@@ -923,6 +922,10 @@ function registerSearchTool(pi: ExtensionAPI): void {
           files: scanResult.files,
           truncationReasons: scanResult.stats.truncationReasons,
           signal,
+          timeoutMs: nativeSymbolTimeoutMs(),
+          onStart: () =>
+            shouldShowIndexStatus(ctx) && ctx.ui.setStatus(STATUS_KEY, `index:analyzing ${symbol}`),
+          onFinish: () => updateIndexStatus(ctx, scanResult),
         });
         return {
           content: [{ type: "text" as const, text: analysis.text }],
