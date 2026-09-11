@@ -948,9 +948,13 @@ describe("PR review Herdr agents", () => {
     expect(calls.at(-1)).toEqual(["tab", "close", "tab-1"]);
   });
 
-  test("routes review and post-review model calls through Herdr", async () => {
+  test("routes review, PR-create, and post-review model calls through Herdr", async () => {
     const reviewAgents = await readFile(
       new URL("../pr-review/runtime/review-agents.js", import.meta.url),
+      "utf8",
+    );
+    const prCreateAgents = await readFile(
+      new URL("../pr-review/runtime/pr-create.js", import.meta.url),
       "utf8",
     );
     const processAgents = await readFile(
@@ -959,10 +963,13 @@ describe("PR review Herdr agents", () => {
     );
 
     expect(reviewAgents).toContain("runPiAgentInHerdr");
+    expect(prCreateAgents).toContain("runPiAgentInHerdr");
     expect(processAgents).toContain("runPiAgentInHerdr");
     expect(reviewAgents).not.toContain("PI_REVIEW_PI_BIN");
+    expect(prCreateAgents).not.toContain("PI_REVIEW_PI_BIN");
     expect(processAgents).not.toContain("PI_REVIEW_PI_BIN");
     expect(reviewAgents).not.toContain('"--print"');
+    expect(prCreateAgents).not.toContain('"--print"');
     expect(processAgents).not.toContain('"--print"');
     expect(processAgents).toContain("requireAgentSession: false");
   });

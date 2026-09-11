@@ -31,7 +31,14 @@ When tools are enabled, do not inspect testing guides, nearby tests, `tests/util
 
 - New or changed business rules, calculations, transformations, permissions, validation, tenant isolation, persisted state, rollback, retries, async ordering, and error recovery.
 - Assertions distinguish the intended result from realistic wrong results instead of proving only that code ran or returned a value.
+- Tests treat the database as a black box: they change and inspect application state through existing APIs or controllers, never through direct database access.
+- Builders are the only test utilities allowed to access the database directly, and tests use them only to create initial application state.
+- Before adding a builder, inspect the existing builders and reuse or extend one when it already supports the required state.
+- New builders are tested and provide sensible default values so their API requires only scenario-specific inputs.
+- Test helpers never access the database directly unless they are builders.
 - Test doubles stop at external boundaries; application hooks, APIs, controllers, and database behavior stay real when repository integration utilities support them.
+- Changed tests do not introduce lint-rule disable directives.
 - The test uses the lowest useful tier: unit for isolated logic, integration for in-process application boundaries, and E2E only for behavior requiring a real browser or full journey.
+- Tests reuse existing testing utilities rather than reimplementing equivalent helpers or setup.
 - Repository setup utilities and builders provide lifecycle and unrelated data; scenario-specific values remain explicit so the test's intent is readable.
 - Tests are deterministic and isolated, with no arbitrary sleeps, ordering dependence, or shared mutable state.

@@ -10,6 +10,7 @@ export type ReviewFindingType =
   | "question";
 export type ReviewLaneId =
   | "correctness"
+  | "pr-metadata"
   | "relevance"
   | "security-api"
   | "tests"
@@ -29,6 +30,12 @@ export interface PRRef {
   number: number;
 }
 
+export interface PRCommit {
+  sha: string;
+  title: string;
+  body?: string;
+}
+
 export interface PRMetadata {
   ref: PRRef;
   title: string;
@@ -38,6 +45,7 @@ export interface PRMetadata {
   state: string;
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
+  commits?: PRCommit[];
 }
 
 export interface PRFile {

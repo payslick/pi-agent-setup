@@ -196,6 +196,25 @@ describe("pr review comment posting", () => {
     expect(result.replies).toEqual([]);
   });
 
+  test("keeps unlocated PR metadata findings in the report without treating them as invalid", () => {
+    const result = prepareDryRunPosting({
+      findings: [
+        finding({
+          laneId: "pr-metadata",
+          type: "documentation",
+          location: undefined,
+        }),
+      ],
+    });
+
+    expect(result.drafts).toEqual([]);
+    expect(result.skippedFindings).toContainEqual({
+      level: "warning",
+      findingId: "f1",
+      message: "PR metadata finding is report-only because it has no code location.",
+    });
+  });
+
   test("rejects repeated and overlong prose", () => {
     const repeated = prepareDryRunPosting({
       findings: [finding({ body: "Duplicate submissions overwrite data" })],

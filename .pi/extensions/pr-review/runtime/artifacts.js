@@ -42,6 +42,10 @@ export async function writeSharedReviewArtifacts(ctx, prData, lanes) {
     writtenFiles.push(relativePath(ctx.cwd, filePath));
   };
   await writeSharedFile("pr-metadata.json", `${JSON.stringify(prData.metadata, null, 2)}\n`);
+  await writeSharedFile(
+    "commits.json",
+    `${JSON.stringify(prData.metadata.commits ?? [], null, 2)}\n`,
+  );
   await writeSharedFile("files.json", `${JSON.stringify(prData.files, null, 2)}\n`);
   await writeSharedFile("hunks.json", `${JSON.stringify(prData.hunks, null, 2)}\n`);
   await writeSharedFile(
@@ -67,7 +71,7 @@ export async function writeSharedReviewArtifacts(ctx, prData, lanes) {
     "review-agent-tool-guard.ts",
     reviewAgentToolGuardSource(sharedDir, sharedDir),
   );
-  return { sessionId, baseDir, sharedDir, files: writtenFiles };
+  return { sessionId, baseDir, sharedDir, files: writtenFiles, fullPatch: prData.patch };
 }
 
 function sharedReviewReadme(sessionId, sharedDir) {
@@ -79,6 +83,7 @@ function sharedReviewReadme(sessionId, sharedDir) {
     "",
     "## Files",
     "- `pr-metadata.json` — normalized PR metadata.",
+    "- `commits.json` — complete commit history from the base to the PR head.",
     "- `files.json` — changed file list from GitHub/local diff.",
     "- `hunks.json` — parsed diff hunks with line numbers.",
     "- `patch.diff` — full patch text.",
@@ -86,7 +91,7 @@ function sharedReviewReadme(sessionId, sharedDir) {
     "- `review-agent-tool-guard.ts` — tool-call guard loaded into lane-agent Pi processes.",
     "",
     "## Tool/edit rules",
-    "- Every lane agent may use get_data for bounded, read-only investigation.",
+    "- Every lane agent may use read-many-files-lines for bounded, read-only investigation.",
     "- Additional read, web, and project_index tools may be enabled for lane agents.",
     "- Bash is unavailable except to ci-analysis, where a guard permits only direct, read-only gh pr checks, gh run list, and gh run view calls.",
     `- Lane agents may edit only their own lane directory under \`tmp/${sessionId}/<lane>\` or this shared directory: \`${sharedDir}\`.`,
@@ -103,6 +108,10 @@ export function isAllowedCiAnalysisBashCall(input) {
 
 export function reviewAgentToolGuardSource(laneDir, sharedDir, options = {}) {
   const allowCiAnalysisGhBash = options.allowCiAnalysisGhBash === true;
+  const allowUnlocatedFindings = options.allowUnlocatedFindings === true;
+  const requiredFindingFields = allowUnlocatedFindings
+    ? ["severity", "type", "title", "body"]
+    : ["severity", "type", "path", "line", "title", "body"];
   const promptFile = typeof options.promptFile === "string" ? options.promptFile : undefined;
   const partialFindingsFile =
     typeof options.partialFindingsFile === "string" ? options.partialFindingsFile : undefined;
@@ -135,7 +144,7 @@ export function reviewAgentToolGuardSource(laneDir, sharedDir, options = {}) {
           '    promptSnippet: "Record a confirmed PR review finding immediately for live progress.",',
           '    promptGuidelines: ["Before requesting more evidence, record every finding that already meets the reporting threshold. Do not defer confirmed findings until the final response."],',
           '    parameters: { type: "object", additionalProperties: false,',
-          '      required: ["severity", "type", "path", "line", "title", "body"],',
+          `      required: ${JSON.stringify(requiredFindingFields)},`,
           "      properties: {",
           '        severity: { type: "string" },',
           '        type: { type: "string" },',
@@ -153,7 +162,7 @@ export function reviewAgentToolGuardSource(laneDir, sharedDir, options = {}) {
           "      },",
           "    },",
           "    execute: async (_toolCallId, finding, _signal, _onUpdate, ctx) => {",
-          '      if (/^(?:\\.\\/)?drizzle(?:\\/|$)/i.test(finding.path.trim())) {',
+          '      if (typeof finding.path === "string" && /^(?:\\.\\/)?drizzle(?:\\/|$)/i.test(finding.path.trim())) {',
           '        return { content: [{ type: "text", text: "Files under drizzle/ are outside review scope." }], isError: true };',
           "      }",
           `      const outputPath = path.resolve(ctx.cwd, ${JSON.stringify(partialFindingsFile)});`,

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 import {
   AssistantMessageComponent,
@@ -14,6 +15,7 @@ import {
   type OverlayOptions,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { createJiti } from "jiti/static";
 
 import { accessModeStatus } from "../access-mode/state";
 import { resolveFooterTopLine, resolvePrefixFooterLines } from "../context-summary-footer";
@@ -179,6 +181,19 @@ const fullscreenMessageScrollerHarness = (
 };
 
 describe("Pi prefix commands", () => {
+  test("shares commands across Pi's isolated extension module loaders", async () => {
+    const registryPath = fileURLToPath(new URL("../prefix-mode/registry.ts", import.meta.url));
+    const loadRegistry = () =>
+      createJiti(import.meta.url, { moduleCache: false }).import<{
+        prefixCommandRegistry: PrefixCommandRegistry;
+      }>(registryPath);
+
+    const first = await loadRegistry();
+    const second = await loadRegistry();
+
+    expect(first.prefixCommandRegistry).toBe(second.prefixCommandRegistry);
+  });
+
   test("matches Tab and Shift+Tab with Pi TUI keys", () => {
     expect(accessModeTabDirection("\t")).toBe(1);
     expect(accessModeTabDirection("\x1b[Z")).toBe(-1);

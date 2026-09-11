@@ -170,6 +170,22 @@ describe("bash guard access modes", () => {
     }
   });
 
+  test("allows standard output suppression through /dev/null in mode 3", async () => {
+    const command =
+      "git log --oneline --all -25 && git diff --stat main..omry/alerts-v4 2>/dev/null | tail -80";
+
+    expect(analyzeBashCommand(command, 3)).toBeNull();
+
+    setAccessMode(3);
+    expect(
+      await registerBashGuard()({
+        toolName: "bash",
+        toolCallId: "bash-dev-null",
+        input: { action: "read", purpose: "Inspect branch diffs", command },
+      }),
+    ).toBeUndefined();
+  });
+
   test("allows host path controls in mode 4 but retains non-path safety rules", () => {
     for (const command of [
       "cd /tmp && echo ok",

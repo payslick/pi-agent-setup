@@ -5,6 +5,7 @@ import type {
   DiffHunk,
   DiffLine,
   FetchPrReviewCommentsOptions,
+  PRCommit,
   PRFile,
   PRMetadata,
   PrReviewComments,
@@ -52,6 +53,11 @@ interface GhPrView {
   headRefName?: string;
   headRefOid?: string;
   files?: GhPrFile[];
+  commits?: Array<{
+    oid?: string;
+    messageHeadline?: string;
+    messageBody?: string;
+  }>;
 }
 
 export async function resolvePrNumber(
@@ -82,7 +88,7 @@ export async function fetchPrData(
       "view",
       String(prNumber),
       "--json",
-      "number,title,body,author,url,state,baseRefName,baseRefOid,headRefName,headRefOid,files",
+      "number,title,body,author,url,state,baseRefName,baseRefOid,headRefName,headRefOid,files,commits",
     ],
     { cwd, timeout: 30_000 },
   );
@@ -128,6 +134,7 @@ export async function fetchPrData(
       state: parsed.state ?? "unknown",
       base: { ref: parsed.baseRefName ?? "main", sha: parsed.baseRefOid ?? "" },
       head: { ref: parsed.headRefName ?? "", sha: parsed.headRefOid ?? "" },
+      commits: githubCommits(parsed.commits),
     },
     files: files.length ? files : filesFromPatch(patchResult.stdout),
     patch: patchResult.stdout,
@@ -155,6 +162,11 @@ export async function fetchLocalData(
     "--unified=80",
     `${baseRef}...HEAD`,
   ]);
+  const commitLog = await requiredStdout(exec, cwd, "git", [
+    "log",
+    "--format=%H%x00%s%x00%b%x1e",
+    `${baseRef}..HEAD`,
+  ]);
   const files = filesFromNameStatus(nameStatus);
   return {
     prNumber: 0,
@@ -167,11 +179,31 @@ export async function fetchLocalData(
       state: "local",
       base: { ref: baseRef, sha: baseSha },
       head: { ref: branch, sha: headSha },
+      commits: localCommits(commitLog),
     },
     files: files.length ? files : filesFromPatch(patch),
     patch,
     hunks: parseAddedLineDiffHunks(patch),
   };
+}
+
+function githubCommits(commits: GhPrView["commits"]): PRCommit[] {
+  return (commits ?? []).map((commit) => ({
+    sha: commit.oid ?? "",
+    title: commit.messageHeadline ?? "(untitled commit)",
+    body: commit.messageBody?.trim() || undefined,
+  }));
+}
+
+function localCommits(output: string): PRCommit[] {
+  return output
+    .split("\x1e")
+    .map((record) => record.trim())
+    .filter(Boolean)
+    .map((record) => {
+      const [sha = "", title = "(untitled commit)", ...bodyParts] = record.split("\x00");
+      return { sha, title, body: bodyParts.join("\x00").trim() || undefined };
+    });
 }
 
 export async function fetchPrReviewComments(

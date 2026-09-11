@@ -230,16 +230,11 @@ export function buildPrCreateDraftPrompt(contextData, labels, screenshotMarkdown
       ? `Existing body:\n${truncateForPrompt(contextData.existingPrBody, 8_000)}`
       : undefined,
     "",
-    "## Required title style",
-    "Use <Type>(<scope>): <description> with capitalized type. Valid types: Feat, Fix, Refactor, Perf, Docs, Test, Chore, Style, CI, Build.",
-    "Reflect the whole branch, not only the latest commit.",
+    screenshotMarkdown ? `## Screenshot markdown to include\n${screenshotMarkdown}` : undefined,
     "",
-    "## Required body sections",
-    "## Why — 1-2 bullets with business/user value, not implementation details.",
-    "## What — high-level summary of changed behavior.",
-    "## Testing — behavior coverage and known gaps; do not paste command output.",
-    "## Affected Routes — list impacted routes; mark uncovered routes with ⚠️ when known.",
-    screenshotMarkdown ? `## Screenshot markdown to embed\n${screenshotMarkdown}` : undefined,
+    contextData.relatedTickets
+      ? `## Related issues and PRs (read before drafting)\n${contextData.relatedTickets}`
+      : undefined,
     "",
     "## Commits since base",
     contextData.commits || "(no commits listed)",
@@ -256,6 +251,9 @@ export function buildPrCreateDraftPrompt(contextData, labels, screenshotMarkdown
     contextData.prAnalysis
       ? `## PR pre-analysis JSON\n${JSON.stringify(contextData.prAnalysis, null, 2)}`
       : undefined,
+    contextData.relatedTickets
+      ? `## Related GitHub issues and pull requests\n${truncateForPrompt(contextData.relatedTickets, 40_000)}`
+      : undefined,
     "",
     "## Complete diff (truncated)",
     truncateForPrompt(contextData.diff, 80_000),
@@ -264,62 +262,14 @@ export function buildPrCreateDraftPrompt(contextData, labels, screenshotMarkdown
     .join("\n");
 }
 
-export function fallbackPrCreateDraft(contextData) {
-  const firstCommit = contextData.commits
-    .split(/\r?\n/)
-    .find(Boolean)
-    ?.replace(/^\S+\s+/, "");
-  return {
-    title: sentenceCaseConventionalTitle(firstCommit || `update ${contextData.branch}`),
-    body: [
-      "## Why",
-      "- This branch updates the project behavior described by the changed files.",
-      "",
-      "## What",
-      ...contextData.changedFiles.slice(0, 20).map((filePath) => `- Updated ${filePath}`),
-      contextData.changedFiles.length > 20
-        ? `- Updated ${contextData.changedFiles.length - 20} additional file(s)`
-        : undefined,
-      "",
-      "## Testing",
-      "- Not covered: summarize behavior-specific automated coverage before marking ready for review.",
-      "",
-      "## Affected Routes",
-      "- Not determined",
-    ]
-      .filter((line) => line !== undefined)
-      .join("\n"),
-  };
-}
-
-function sentenceCaseConventionalTitle(value) {
-  return `Chore: ${value.replace(/^(feat|fix|docs|test|chore|refactor|perf|style|ci|build)(\(.+?\))?:\s*/i, "").trim() || "update project"}`;
-}
-
-export function normalizePrCreateDraft(draft, screenshotMarkdown) {
-  let body = draft.body.trim();
-  for (const heading of ["## Why", "## What", "## Testing", "## Affected Routes"])
-    if (!new RegExp(`^${escapeRegExp(heading)}\\b`, "m").test(body))
-      body += `\n\n${heading}\n- Not determined`;
-  if (screenshotMarkdown && !body.includes(screenshotMarkdown.trim()))
-    body = body.replace(/(## Affected Routes\s*\n)/, `$1${screenshotMarkdown.trim()}\n`);
-  return { title: normalizeConventionalTitle(draft.title), body: `${body.trim()}\n` };
-}
-
-function normalizeConventionalTitle(value) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized) return "Chore: update project";
-  const match =
-    /^(feat|fix|refactor|perf|docs|test|chore|style|ci|build)(\([^)]*\))?(!)?:\s*(.+)$/i.exec(
-      normalized,
-    );
-  if (!match) return normalized;
-  const lowercaseType = match[1].toLowerCase();
-  const type =
-    lowercaseType === "ci"
-      ? "CI"
-      : `${lowercaseType[0]?.toUpperCase() || ""}${lowercaseType.slice(1)}`;
-  return `${type}${match[2] || ""}${match[3] || ""}: ${match[4].trim()}`;
+export function normalizePrCreateDraft(draft, requiredMarkdown = "") {
+  const title = typeof draft?.title === "string" ? draft.title.replace(/\s+/g, " ").trim() : "";
+  const body = typeof draft?.body === "string" ? draft.body.trim() : "";
+  if (!title) throw new Error("PR metadata agent returned an empty title.");
+  if (!body) throw new Error("PR metadata agent returned an empty description.");
+  if (requiredMarkdown.trim() && !body.includes(requiredMarkdown.trim()))
+    throw new Error("PR metadata agent omitted the required screenshot markdown.");
+  return { title, body: `${body}\n` };
 }
 
 export async function fetchPrCreateGhResult(pi, ctx, selector) {
@@ -391,7 +341,19 @@ export async function applyAgentFileWrites(ctx, parsed, allowPath = () => true) 
   return writtenFiles;
 }
 
-function noToolAgentArguments(model, systemPrompt, prompt, thinking = "off") {
+export function lifecycleAgentArguments(
+  model,
+  systemPrompt,
+  prompt,
+  thinking = "off",
+  options = {},
+) {
+  const toolArguments = options.tools?.length
+    ? ["--tools", options.tools.join(",")]
+    : ["--no-tools"];
+  const skillArguments = options.skillPath
+    ? ["--no-skills", "--skill", options.skillPath]
+    : ["--no-skills"];
   return [
     "--print",
     "--mode",
@@ -399,9 +361,10 @@ function noToolAgentArguments(model, systemPrompt, prompt, thinking = "off") {
     ...(model ? ["--model", model] : []),
     "--thinking",
     thinking,
-    "--no-tools",
+    ...toolArguments,
     "--no-extensions",
-    "--no-skills",
+    ...(options.extensions ?? []).flatMap((extensionPath) => ["--extension", extensionPath]),
+    ...skillArguments,
     "--no-prompt-templates",
     "--no-context-files",
     "--no-session",
@@ -419,10 +382,11 @@ export function runLifecycleAgent(
   systemPrompt,
   timeout,
   thinking = "off",
+  options = {},
 ) {
   return pi.exec(
     process.env.PI_REVIEW_PI_BIN || "pi",
-    noToolAgentArguments(agentModel(ctx), systemPrompt, prompt, thinking),
+    lifecycleAgentArguments(agentModel(ctx), systemPrompt, prompt, thinking, options),
     commandOptions(ctx, timeout),
   );
 }
@@ -634,10 +598,6 @@ export function truncateForPrompt(value, maxLength) {
   if (value.length <= maxLength) return value;
   const headLength = Math.floor(maxLength / 2);
   return `${value.slice(0, headLength)}\n… truncated …\n${value.slice(-(maxLength - headLength))}`;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getReviewSessionDir(ctx) {

@@ -21,6 +21,9 @@ export const DIRECT_READ_TOOL_NAMES = new Set([
   "bash",
 ]);
 
+const GET_DATA_CHILD_ENV = "PI_GET_DATA_CHILD";
+const MODE_THREE_DELEGATED_READ_TOOL_NAMES = new Set(["read"]);
+
 export const WRITE_TOOL_NAMES = new Set(["edit", "write", "multi-edit", "project_index_refresh"]);
 
 export const EXECUTE_TOOL_NAMES = new Set([
@@ -46,6 +49,12 @@ export function isBashActionAllowed(action: unknown, mode: AccessMode = getAcces
 
 export function isToolAllowed(toolName: string, mode: AccessMode = getAccessMode()): boolean {
   if (mode === 4) return true;
+  if (
+    mode === 3 &&
+    process.env[GET_DATA_CHILD_ENV] !== "1" &&
+    MODE_THREE_DELEGATED_READ_TOOL_NAMES.has(toolName)
+  )
+    return false;
   if (toolName === "get_data") return mode >= 2;
 
   switch (toolCapability(toolName)) {

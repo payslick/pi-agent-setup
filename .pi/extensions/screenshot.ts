@@ -6,11 +6,14 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { assertProjectPath } from "./access-mode/path-policy";
 import { canExecute, getAccessProjectRoot } from "./access-mode/state";
+import { registerPrefixCommand } from "./prefix-mode/registry";
 
 const STATUS_KEY = "screenshot";
 const WIDGET_KEY = "screenshot";
@@ -18,6 +21,7 @@ const DEFAULT_LOCALE = "en";
 const DEFAULT_WAIT_MS = 3000;
 const DEFAULT_ELEMENT_TIMEOUT_MS = 20_000;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = positiveIntegerEnv("PI_SCREENSHOT_TIMEOUT_SECONDS", 120);
+const COLLAPSED_ERROR_LINES = 3;
 const SCREENSHOT_PROMPT_MARKER = "Screenshot extension workflow:";
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const scriptsDir = path.resolve(extensionDir, "..", "finito-scripts", "scripts");
@@ -273,12 +277,30 @@ function setWidget(ctx: ExtensionCommandContext, lines: string[]): void {
   if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
 }
 
-function firstLine(text: string): string {
-  return text.split(/\r?\n/, 1)[0] ?? text;
+export function clearScreenshotWidget(ctx: ExtensionContext): void {
+  if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 }
 
-function errorWidgetLines(message: string): string[] {
-  return ["Screenshot failed:", ...message.split(/\r?\n/).slice(0, 12)];
+export function screenshotErrorWidget(
+  message: string,
+): (tui: TUI, theme: Theme) => Component {
+  return (_tui, theme) => ({
+    invalidate() {},
+    render(width) {
+      return wrapTextWithAnsi(`Screenshot failed:\n${message}`, Math.max(1, width))
+        .slice(0, COLLAPSED_ERROR_LINES)
+        .map((line) => theme.fg("error", line));
+    },
+  });
+}
+
+function setErrorWidget(ctx: ExtensionCommandContext, message: string): void {
+  if (ctx.hasUI)
+    ctx.ui.setWidget(WIDGET_KEY, screenshotErrorWidget(message), { placement: "belowEditor" });
+}
+
+function firstLine(text: string): string {
+  return text.split(/\r?\n/, 1)[0] ?? text;
 }
 
 function usageLines(): string[] {
@@ -540,7 +562,7 @@ function registerScreenshotCommand(pi: ExtensionAPI): void {
           ctx.ui.notify(result.githubUrl ? "Screenshot uploaded." : "Screenshot saved.", "info");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setWidget(ctx, errorWidgetLines(message));
+        setErrorWidget(ctx, message);
         if (ctx.hasUI) ctx.ui.notify(`Screenshot failed: ${firstLine(message)}`, "error");
       } finally {
         setStatus(ctx, undefined);
@@ -548,6 +570,13 @@ function registerScreenshotCommand(pi: ExtensionAPI): void {
     },
   });
 }
+
+registerPrefixCommand({
+  key: "e",
+  description: "clear screenshot error",
+  group: "Messages",
+  run: clearScreenshotWidget,
+});
 
 export default function screenshotExtension(pi: ExtensionAPI): void {
   registerScreenshotPrompt(pi);

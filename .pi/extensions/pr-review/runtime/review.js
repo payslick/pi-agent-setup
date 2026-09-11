@@ -413,8 +413,8 @@ export function countSessionMessages(content) {
 export function countPartialFindings(content) {
   const findingKeys = new Set();
   for (const finding of parseJsonLines(content)) {
-    if (!finding || typeof finding !== "object" || typeof finding.path !== "string") continue;
-    findingKeys.add(`${finding.path}:${finding.line ?? ""}:${finding.title ?? ""}`);
+    if (!finding || typeof finding !== "object" || typeof finding.title !== "string") continue;
+    findingKeys.add(`${finding.path ?? ""}:${finding.line ?? ""}:${finding.title}`);
   }
   return findingKeys.size;
 }

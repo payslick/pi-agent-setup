@@ -76,6 +76,7 @@ describe("access mode state", () => {
 describe("access mode tool policy", () => {
   const tools = [
     "read",
+    "read-many-files-lines",
     "get_data",
     "write",
     "multi-edit",
@@ -84,17 +85,22 @@ describe("access mode tool policy", () => {
     "custom-tool",
   ];
 
-  test("exposes cumulative read, write, and execute capabilities", () => {
-    expect(filterToolsForAccessMode(tools, 1)).toEqual(["read", "bash"]);
+  test("blocks only the direct read tool in mode 3", () => {
+    expect(filterToolsForAccessMode(tools, 1)).toEqual([
+      "read",
+      "read-many-files-lines",
+      "bash",
+    ]);
     expect(filterToolsForAccessMode(tools, 2)).toEqual([
       "read",
+      "read-many-files-lines",
       "get_data",
       "write",
       "multi-edit",
       "bash",
     ]);
     expect(filterToolsForAccessMode(tools, 3)).toEqual([
-      "read",
+      "read-many-files-lines",
       "get_data",
       "write",
       "multi-edit",
@@ -104,6 +110,10 @@ describe("access mode tool policy", () => {
 
     expect(isToolAllowed("get_data", 1)).toBe(false);
     expect(isToolAllowed("get_data", 2)).toBe(true);
+    expect(isToolAllowed("read", 3)).toBe(false);
+    expect(isToolAllowed("read-many-files-lines", 3)).toBe(true);
+    expect(isToolAllowed("read", 4)).toBe(true);
+    expect(isToolAllowed("read-many-files-lines", 4)).toBe(true);
     expect(isToolAllowed("write", 1)).toBe(false);
     expect(isToolAllowed("write", 2)).toBe(true);
     expect(isToolAllowed("debug_ui_start", 2)).toBe(false);
@@ -157,10 +167,14 @@ describe("access mode project paths", () => {
 describe("access mode prompt", () => {
   test("replaces stale mode guidance", () => {
     const modeOne = appendAccessModeInstructions("base", 1);
-    const modeFour = appendAccessModeInstructions(modeOne, 4);
+    const modeThree = appendAccessModeInstructions(modeOne, 3);
+    const modeFour = appendAccessModeInstructions(modeThree, 4);
 
     expect(modeOne).toContain("Access mode 1: read only");
     expect(modeOne).toContain("Bash self-reported as read");
+    expect(modeThree).toContain("read-many-files-lines");
+    expect(modeThree).toContain("parent read is blocked");
+    expect(modeThree).toContain("use get_data when requested data must be located");
     expect(modeFour).toContain("Access mode 4: unrestricted host access");
     expect(modeFour).not.toContain("Access mode 1: read only");
   });
@@ -174,6 +188,7 @@ describe("access mode extension enforcement", () => {
     const statuses = new Map<string, string | undefined>();
     const allTools = [
       "read",
+      "read-many-files-lines",
       "grep",
       "get_data",
       "write",
@@ -211,7 +226,7 @@ describe("access mode extension enforcement", () => {
 
     setAccessMode(1);
     handlers.get("session_start")?.({}, ctx);
-    expect(activeTools).toEqual(["read", "grep", "bash"]);
+    expect(activeTools).toEqual(["read", "read-many-files-lines", "grep", "bash"]);
     expect(statuses.get("access-mode")).toBe("1: r");
     const allowedRead = await handlers.get("tool_call")?.(
       { toolName: "read", input: { path: "inside.txt" }, toolCallId: "read-1" },
@@ -229,7 +244,15 @@ describe("access mode extension enforcement", () => {
     expect(blockedWriteBash).toMatchObject({ block: true });
 
     setAccessMode(2);
-    expect(activeTools).toEqual(["read", "grep", "get_data", "write", "multi-edit", "bash"]);
+    expect(activeTools).toEqual([
+      "read",
+      "read-many-files-lines",
+      "grep",
+      "get_data",
+      "write",
+      "multi-edit",
+      "bash",
+    ]);
     const allowedWriteBash = await handlers.get("tool_call")?.(
       {
         toolName: "bash",
@@ -247,7 +270,7 @@ describe("access mode extension enforcement", () => {
 
     setAccessMode(3);
     expect(activeTools).toEqual([
-      "read",
+      "read-many-files-lines",
       "grep",
       "get_data",
       "write",
@@ -264,6 +287,7 @@ describe("access mode extension enforcement", () => {
     setAccessMode(4);
     expect(activeTools).toEqual([
       "read",
+      "read-many-files-lines",
       "grep",
       "get_data",
       "write",

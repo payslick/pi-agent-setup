@@ -709,6 +709,10 @@ function isGhApiEndpoint(words: string[], index: number): boolean {
   return !hasDestructiveMethod;
 }
 
+function isNullDevicePath(value: string): boolean {
+  return value === "/dev/null";
+}
+
 function isUnsafePathToken(token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(trimmed)) return false;
@@ -717,7 +721,12 @@ function isUnsafePathToken(token: string): boolean {
   const value = trimmed.replace(/^["']|["']$/g, "");
   const pathValue = value.includes("=") ? value.slice(value.indexOf("=") + 1) : value;
 
-  if (!pathValue || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(pathValue)) return false;
+  if (
+    !pathValue ||
+    isNullDevicePath(pathValue) ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(pathValue)
+  )
+    return false;
   if (pathValue === "/") return true;
   if (pathValue.startsWith("/") || pathValue.startsWith("~/") || pathValue === "~") return true;
   if (/^\$\{?HOME\}?($|\/)/.test(pathValue)) return true;
@@ -772,6 +781,7 @@ function bashPathCandidates(command: string): string[] {
         !word ||
         word === "--" ||
         word.startsWith("-") ||
+        isNullDevicePath(word) ||
         /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(word) ||
         isGhApiEndpoint(commandWords, index)
       )
@@ -781,7 +791,8 @@ function bashPathCandidates(command: string): string[] {
   }
   for (const match of command.matchAll(/[<>]{1,2}\s*([^\s;&|]+)/g)) {
     const target = match[1]?.replace(/^['"]|['"]$/g, "");
-    if (target && target !== "&1" && target !== "&2") candidates.add(target);
+    if (target && target !== "&1" && target !== "&2" && !isNullDevicePath(target))
+      candidates.add(target);
   }
   return [...candidates];
 }

@@ -21,6 +21,9 @@ const pr: PRMetadata = {
   state: "open",
   base: { ref: "main", sha: "base" },
   head: { ref: "feature/invoice-export", sha: "head" },
+  commits: [
+    { sha: "abc123", title: "Add invoice export", body: "Include finance CSV fields." },
+  ],
 };
 
 const packet: ReviewLanePacket = {
@@ -50,13 +53,44 @@ describe("pr review lanes", () => {
     );
   });
 
-  test("routes the relevance lane with a material scope threshold", () => {
+  test("routes the PR metadata lane with the installed policy boundary", () => {
+    const lanes = routeReviewLanes({ pr, files: packet.files, hunks: [] });
+    const metadataLane = lanes.find((lane) => lane.laneId === "pr-metadata");
+
+    expect(metadataLane).toBeDefined();
+    expect(metadataLane?.focus).toContain("Load and follow the explicitly configured `pr-metadata` skill");
+    const prompt = buildLaneReviewPrompt(pr, metadataLane!, {
+      sharedDir: "tmp/session/shared",
+      laneDir: "tmp/session/pr-metadata",
+      sharedFiles: ["tmp/session/shared/commits.json", "tmp/session/shared/patch.diff"],
+      fullPatch: "diff --git a/src/export.ts b/src/export.ts\n+FULL_PATCH_TAIL\n",
+    });
+    expect(prompt).toContain('"type":"documentation|question"');
+    expect(prompt).not.toContain('"path":"file"');
+    expect(prompt).toContain("## Complete commit history");
+    expect(prompt).toContain("abc123 — Add invoice export");
+    expect(prompt).toContain("Include finance CSV fields.");
+    expect(prompt).toContain("## Complete reviewable diff");
+    expect(prompt).toContain("FULL_PATCH_TAIL");
+  });
+
+  test("routes the relevance lane with a complete material-scope audit", () => {
     const lanes = routeReviewLanes({ pr, files: packet.files, hunks: [] });
     const relevanceLane = lanes.find((lane) => lane.laneId === "relevance");
 
     expect(relevanceLane).toBeDefined();
-    expect(relevanceLane?.focus).toContain("adds meaningful review, release, or rollback risk");
-    expect(relevanceLane?.focus).toContain("not a prerequisite or supporting refactor");
+    expect(relevanceLane?.focus).toContain("Review every changed file group");
+    expect(relevanceLane?.focus).toContain("behavior-preserving refactor");
+    expect(relevanceLane?.focus).toContain("smallest plausible implementation");
+    expect(relevanceLane?.focus).toContain("does not by itself prove that the scope is necessary");
+    expect(relevanceLane?.focus).toContain("inspect the lane's `hunks.json`");
+    expect(relevanceLane?.focus).toContain("runtime behavior change is not required");
+  });
+
+  test("allows relevance to inspect omitted or truncated hunks", () => {
+    expect(readSharedReviewLanePrompt()).toContain(
+      "unless the assigned lane is relevance and its required material-scope audit needs omitted or truncated hunks",
+    );
   });
 
   test("routes dedupe lane and asks it to search for reusable code", () => {
@@ -127,8 +161,9 @@ describe("pr review lanes", () => {
     expect(prompt).toContain("Artifact paths are references, not a reading checklist");
     expect(prompt).toContain("unless a specific truncated hunk requires omitted context");
     expect(prompt).not.toContain("Read shared data before using tools");
-    expect(prompt).toContain("Use `read` or `read-many-files-lines`");
-    expect(prompt).toContain("Reserve `get_data` for bounded cross-file investigation");
+    expect(prompt).toContain("Use `read-many-files-lines` for bounded file-content retrieval");
+    expect(prompt).toContain("request only the minimum necessary line ranges");
+    expect(prompt).not.toContain("get_data");
     expect(prompt).toContain("`report_pr_review_finding`");
     expect(prompt).toContain("does not replace the final JSON response");
   });

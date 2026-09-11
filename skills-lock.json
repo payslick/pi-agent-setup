@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "skills": {
+    "feature": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "5c457bc58cd31984ef23e1226bb5b101bbae699db4ffd9d8258c28841fa6a31a"
+    },
+    "pr": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "170320ff009aad96275ff4ee79dcab4e8dce9e64d9fa407f140eb4eaca03eef2"
+    },
+    "pr-metadata": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "d64849ce5ed916f794e11d4c7b9d72347381193e6c4c2a6643371350ffc7baa7"
+    },
+    "pr-update": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "2b890b5bf789085ea25a6717b5b4a233c046bd9f1551cf018db6b52386c52163"
+    },
+    "review": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "d2889b98cfa2516c1a8b0d134d020b35fb7a5faa3f759edffd083dc8f7ae6b64"
+    }
+  }
+}

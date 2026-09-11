@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 export const REVIEW_LANE_PROMPT_IDS = [
   "correctness",
+  "pr-metadata",
   "relevance",
   "security-api",
   "tests",
@@ -21,6 +22,7 @@ export type ReviewLanePromptId = (typeof REVIEW_LANE_PROMPT_IDS)[number];
 const SHARED_PROMPT_URL = new URL("./prompts/shared.md", import.meta.url);
 const LANE_PROMPT_URLS: Record<ReviewLanePromptId, URL> = {
   correctness: new URL("./prompts/lanes/correctness.md", import.meta.url),
+  "pr-metadata": new URL("./prompts/lanes/pr-metadata.md", import.meta.url),
   relevance: new URL("./prompts/lanes/relevance.md", import.meta.url),
   "security-api": new URL("./prompts/lanes/security-api.md", import.meta.url),
   tests: new URL("./prompts/lanes/tests.md", import.meta.url),

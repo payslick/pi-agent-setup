@@ -34,7 +34,7 @@ function modeInstructions(mode: AccessMode): string {
       case 2:
         return "Direct reads, get_data, file writes, and Bash self-reported as read or write are allowed. Other process/browser execution and subagents are blocked.";
       case 3:
-        return "Known read, write, and execute tools are allowed; structured paths and explicit shell path arguments are project-scoped.";
+        return "Known write, execute, read-many-files-lines, search, index, web, and log tools are allowed, but parent read is blocked; use get_data when requested data must be located through searching or reasoning. Structured paths and explicit shell path arguments are project-scoped.";
       case 4:
         return "All registered tools and host filesystem paths are allowed, subject to OS permissions and non-path safety guards.";
     }

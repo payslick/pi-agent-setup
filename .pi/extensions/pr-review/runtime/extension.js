@@ -27,7 +27,7 @@ export function registerPrReviewExtension(pi) {
 
   pi.registerCommand("pr-create", {
     description:
-      "Create or update a GitHub PR from the current branch (usage: /pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--screenshots <file>] [--skip-screenshots])",
+      "Create or update a GitHub PR from the current branch (usage: /pr-create [pr-number|branch] [--base=main] [--no-sync] [--no-checks] [--no-push] [--no-ci-watch] [--screenshots <file>] [--skip-screenshots] [--ready])",
     handler: async (args, ctx) => runPrCreateCommand(pi, ctx, args, fixPrUpdateStaleDocs),
   });
   pi.registerCommand("pr-update", {

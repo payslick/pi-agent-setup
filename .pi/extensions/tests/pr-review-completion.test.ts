@@ -163,11 +163,12 @@ describe("PR review completion", () => {
           { path: "src/a.ts", line: 1, title: "First" },
           { path: "src/a.ts", line: 1, title: "First" },
           { path: "src/b.ts", line: 2, title: "Second" },
+          { title: "Metadata-only finding" },
         ]
-          .map(JSON.stringify)
+          .map((finding) => JSON.stringify(finding))
           .join("\n"),
       ),
-    ).toBe(2);
+    ).toBe(3);
   });
 
   test("recommends approval and skips the action picker when a complete review finds no issues", async () => {

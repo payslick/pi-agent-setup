@@ -17,9 +17,12 @@ export function prepareDryRunPosting(input) {
     const draft = findingToDraft(finding, { modelName: input.modelName, reviewTypes });
     if (!draft) {
       skippedFindings.push({
-        level: "error",
+        level: finding.laneId === "pr-metadata" ? "warning" : "error",
         findingId: finding.id,
-        message: "Finding has no file path and numeric line for an inline review comment.",
+        message:
+          finding.laneId === "pr-metadata"
+            ? "PR metadata finding is report-only because it has no code location."
+            : "Finding has no file path and numeric line for an inline review comment.",
       });
       continue;
     }

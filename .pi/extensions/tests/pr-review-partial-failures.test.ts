@@ -55,6 +55,35 @@ describe("failed PR review lane partial findings", () => {
     }
   });
 
+  test("recovers metadata-only partial findings without a code location", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pr-review-metadata-partials-"));
+    const partialFindingsPath = path.join(directory, "partial-findings.jsonl");
+    try {
+      await writeFile(
+        partialFindingsPath,
+        `${JSON.stringify({
+          severity: "medium",
+          type: "documentation",
+          title: "Testing claim is stale",
+          body: "The description names coverage that the branch removed.",
+          confidence: 0.9,
+        })}\n`,
+        "utf8",
+      );
+
+      const findings = await readPartialReviewFindings(partialFindingsPath, "pr-metadata");
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({
+        laneId: "pr-metadata",
+        partial: true,
+        title: "Testing claim is stale",
+        location: undefined,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("persists valid final findings with a legacy write-only artifact writer", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pr-review-legacy-artifacts-"));
     const artifactDir = path.join("tmp", "review-session", "correctness");

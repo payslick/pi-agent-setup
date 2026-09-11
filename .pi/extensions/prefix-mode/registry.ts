@@ -53,7 +53,16 @@ export class PrefixCommandRegistry {
   }
 }
 
-export const prefixCommandRegistry = new PrefixCommandRegistry();
+const PREFIX_COMMAND_REGISTRY_KEY = Symbol.for("payslick.pi.prefix-command-registry.v1");
+const globals = globalThis as unknown as Record<PropertyKey, unknown>;
+
+// Pi evaluates each extension entry with a separate uncached Jiti instance. Keep the
+// registry on globalThis so commands registered by one extension are visible to the
+// prefix-mode extension at runtime.
+export const prefixCommandRegistry =
+  (globals[PREFIX_COMMAND_REGISTRY_KEY] as PrefixCommandRegistry | undefined) ??
+  new PrefixCommandRegistry();
+globals[PREFIX_COMMAND_REGISTRY_KEY] = prefixCommandRegistry;
 
 export const registerPrefixCommand = (command: PrefixCommand): (() => void) =>
   prefixCommandRegistry.register(command);

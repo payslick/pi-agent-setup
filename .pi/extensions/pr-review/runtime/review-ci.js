@@ -197,6 +197,7 @@ export function buildReviewSkillCoverage(input) {
           ? "Lane agents receive parsed diff hunks; full changed-file snapshots are not yet attached."
           : "No diff hunk data available.",
       },
+      laneItem("pr-metadata", "PR metadata policy"),
       laneItem("dedupe", "Dedupe/reuse search"),
       laneItem("api-safety", "API safety agent"),
       laneItem("code-quality", "Code quality agent"),

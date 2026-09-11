@@ -18,6 +18,7 @@ import {
 import { buildLaneReviewPrompt } from "./lanes.js";
 import { readReviewLanePrompt, readSharedReviewLanePrompt } from "../prompt-loader.ts";
 import { filterReviewFindings } from "../review-scope.ts";
+import { resolvePrMetadataSkillPath } from "./pr-metadata.js";
 
 const REVIEW_AGENT_DISABLE_REPAIR = process.env.PI_REVIEW_DISABLE_REPAIR === "1";
 const REVIEW_AGENT_ENABLE_ALL_TOOLS = process.env.PI_REVIEW_AGENT_ENABLE_TOOLS === "1";
@@ -25,14 +26,12 @@ const REVIEW_AGENT_MODEL = process.env.PI_REVIEW_AGENT_MODEL;
 const REVIEW_AGENT_THINKING = process.env.PI_REVIEW_AGENT_THINKING;
 export const DEFAULT_REVIEW_AGENT_TIMEOUT_MS = 2_700_000;
 export const DEFAULT_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS = 600_000;
-const GET_DATA_REVIEW_AGENT_ALLOWED_TOOLS = [
-  "get_data",
+const READ_MANY_REVIEW_AGENT_ALLOWED_TOOLS = [
   REVIEW_AGENT_PARTIAL_FINDING_TOOL,
   "read",
   "read-many-files-lines",
 ].join(",");
 const REVIEW_AGENT_ALLOWED_TOOLS = [
-  "get_data",
   REVIEW_AGENT_PARTIAL_FINDING_TOOL,
   "read",
   "read-many-files-lines",
@@ -47,7 +46,6 @@ const REVIEW_AGENT_ALLOWED_TOOLS = [
   "edit",
 ].join(",");
 const DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS = [
-  "get_data",
   REVIEW_AGENT_PARTIAL_FINDING_TOOL,
   "read",
   "read-many-files-lines",
@@ -56,7 +54,6 @@ const DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS = [
   "project_index_search",
 ].join(",");
 const CI_ANALYSIS_REVIEW_AGENT_ALLOWED_TOOLS = [
-  "get_data",
   REVIEW_AGENT_PARTIAL_FINDING_TOOL,
   "read",
   "read-many-files-lines",
@@ -64,34 +61,39 @@ const CI_ANALYSIS_REVIEW_AGENT_ALLOWED_TOOLS = [
 ].join(",");
 const CI_ANALYSIS_FULL_REVIEW_AGENT_ALLOWED_TOOLS = `${REVIEW_AGENT_ALLOWED_TOOLS},bash`;
 
+const PR_METADATA_FINDINGS_JSON_SCHEMA =
+  '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"documentation|question","title":"short point","body":"at most two short sentences","confidence":0.8}]}';
+
+function findingsJsonSchemaForLane(laneId) {
+  return laneId === "pr-metadata" ? PR_METADATA_FINDINGS_JSON_SCHEMA : FINDINGS_JSON_SCHEMA;
+}
+
 function reviewAgentProtocolWithTools(laneId) {
   return [
     "## Runtime boundaries",
     "Use only the enabled tools. When calling tools, pass arguments as JSON objects, never as stringified JSON.",
-    "Use `read` or `read-many-files-lines` for exact known paths and line ranges. Reserve `get_data` for bounded cross-file investigation when the diff and direct reads are insufficient.",
+    "Use `read-many-files-lines` for bounded file-content retrieval. Request only the minimum necessary line ranges.",
     `Call \`${REVIEW_AGENT_PARTIAL_FINDING_TOOL}\` once when each finding is fully confirmed and intended for the final response. Before requesting more evidence, record every finding that already meets the reporting threshold instead of deferring all progress until final synthesis. Do not record tentative candidates, and include every recorded finding in the final JSON.`,
     laneId === "ci-analysis"
       ? "Bash is restricted to one direct, read-only `gh pr checks`, `gh run list`, or `gh run view` command per call. Set `action` to `read`; other executables and shell operators are forbidden."
       : "Bash is intentionally unavailable.",
     "If you edit files, edit only your lane directory or the shared review directory.",
     "Return JSON only, with this shape:",
-    FINDINGS_JSON_SCHEMA,
+    findingsJsonSchemaForLane(laneId),
     "Use an empty findings array if there are no issues.",
     "Do not include markdown fences or prose outside JSON.",
   ].join("\n");
 }
-const REVIEW_AGENT_PROTOCOL_NO_TOOLS = [
-  "## Runtime boundaries",
-  "Tools are intentionally disabled. Review only the prompt content and return JSON; do not emit tool calls.",
-  "Return JSON only, with this shape:",
-  FINDINGS_JSON_SCHEMA,
-  "Use an empty findings array if there are no issues.",
-  "Do not include markdown fences or prose outside JSON.",
-].join("\n");
-const REPAIR_AGENT_SYSTEM_PROMPT = [
-  "You normalize a PR review agent response into the required JSON protocol.",
-  REVIEW_AGENT_PROTOCOL_NO_TOOLS,
-].join("\n\n");
+function reviewAgentProtocolNoTools(laneId) {
+  return [
+    "## Runtime boundaries",
+    "Tools are intentionally disabled. Review only the prompt content and return JSON; do not emit tool calls.",
+    "Return JSON only, with this shape:",
+    findingsJsonSchemaForLane(laneId),
+    "Use an empty findings array if there are no issues.",
+    "Do not include markdown fences or prose outside JSON.",
+  ].join("\n");
+}
 
 export function reviewAgentToolPolicy(laneId, enableAllTools = REVIEW_AGENT_ENABLE_ALL_TOOLS) {
   if (laneId === "ci-analysis") {
@@ -105,14 +107,14 @@ export function reviewAgentToolPolicy(laneId, enableAllTools = REVIEW_AGENT_ENAB
   if (enableAllTools) return { toolsEnabled: true, allowedTools: REVIEW_AGENT_ALLOWED_TOOLS };
   if (laneId === "dedupe")
     return { toolsEnabled: true, allowedTools: DEDUPE_REVIEW_AGENT_ALLOWED_TOOLS };
-  return { toolsEnabled: true, allowedTools: GET_DATA_REVIEW_AGENT_ALLOWED_TOOLS };
+  return { toolsEnabled: true, allowedTools: READ_MANY_REVIEW_AGENT_ALLOWED_TOOLS };
 }
 
 export function buildReviewLaneSystemPrompt(laneId, toolsEnabled) {
   return [
     readSharedReviewLanePrompt(),
     readReviewLanePrompt(laneId),
-    toolsEnabled ? reviewAgentProtocolWithTools(laneId) : REVIEW_AGENT_PROTOCOL_NO_TOOLS,
+    toolsEnabled ? reviewAgentProtocolWithTools(laneId) : reviewAgentProtocolNoTools(laneId),
   ].join("\n\n");
 }
 
@@ -151,6 +153,7 @@ export function buildReviewAgentArguments(ctx, input) {
         ]
       : ["--no-tools"]),
     "--no-skills",
+    ...(input.skillPath ? ["--skill", input.skillPath] : []),
     "--no-prompt-templates",
     "--no-context-files",
     "--system-prompt",
@@ -248,7 +251,7 @@ function laneAgentErrorResult(laneId, error, artifacts, rawOutput, findings = []
   };
 }
 
-async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts) {
+export async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts) {
   const laneDir = getLaneDir(ctx, packet.laneId);
   const partialFindingsFile = path.join(laneDir, "partial-findings.jsonl");
   const prompt = buildLaneReviewPrompt(prMetadata, packet, {
@@ -256,6 +259,7 @@ async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts)
     laneDir,
     sharedFiles: sharedArtifacts.files,
     partialFindingsFile,
+    fullPatch: packet.laneId === "pr-metadata" ? sharedArtifacts.fullPatch : undefined,
   });
   const artifacts = await createLaneArtifactWriter(ctx, packet.laneId);
   await artifacts.write("prompt.md", prompt);
@@ -289,6 +293,7 @@ async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts)
     reviewAgentToolGuardSource(laneDir, sharedArtifacts.sharedDir, {
       promptFile: path.join(laneDir, "prompt.md"),
       partialFindingsFile,
+      allowUnlocatedFindings: packet.laneId === "pr-metadata",
     }),
   );
   const toolPolicy = reviewAgentToolPolicy(packet.laneId);
@@ -300,6 +305,8 @@ async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArtifacts)
     ...selectedReviewAgentDefaults(pi, ctx),
     ...toolPolicy,
     systemPrompt,
+    skillPath:
+      packet.laneId === "pr-metadata" ? resolvePrMetadataSkillPath(ctx) : undefined,
   });
   return { prompt, artifacts, agentArguments };
 }
@@ -319,25 +326,26 @@ export async function readPartialReviewFindings(partialFindingsPath, laneId) {
 }
 
 function partialFindingOutput(findings) {
-  const records = findings.flatMap((finding) => {
+  const records = findings.map((finding) => {
     const path = finding.location?.filePath;
-    if (!path) return [];
-    return [
-      {
-        severity: finding.severity,
-        type: finding.type,
-        path,
-        line: finding.location?.line ?? finding.location?.startLine ?? 1,
-        startLine: finding.location?.startLine,
-        endLine: finding.location?.endLine,
-        functionName: finding.functionName,
-        title: finding.title,
-        body: finding.body,
-        confidence: finding.confidence,
-        replacement: finding.replacement,
-        example: finding.example,
-      },
-    ];
+    return {
+      severity: finding.severity,
+      type: finding.type,
+      ...(path
+        ? {
+            path,
+            line: finding.location?.line ?? finding.location?.startLine ?? 1,
+            startLine: finding.location?.startLine,
+            endLine: finding.location?.endLine,
+          }
+        : {}),
+      functionName: finding.functionName,
+      title: finding.title,
+      body: finding.body,
+      confidence: finding.confidence,
+      replacement: finding.replacement,
+      example: finding.example,
+    };
   });
   return records.length ? `${records.map((finding) => JSON.stringify(finding)).join("\n")}\n` : "";
 }
@@ -493,19 +501,23 @@ async function repairAgentFindings(pi, ctx, packet, stdout, writeArtifact) {
     "Do not invent findings that are not present in the output.",
     `Lane: ${packet.laneId}`,
     "Required shape:",
-    FINDINGS_JSON_SCHEMA,
+    findingsJsonSchemaForLane(packet.laneId),
     "Agent output:",
     "```",
     truncateForPrompt(stripAnsi(stdout), 20_000),
     "```",
   ].join("\n");
+  const repairSystemPrompt = [
+    "You normalize a PR review agent response into the required JSON protocol.",
+    reviewAgentProtocolNoTools(packet.laneId),
+  ].join("\n\n");
   const agentArguments = [
     ...buildReviewAgentArguments(ctx, {
       laneId: packet.laneId,
       ...selectedReviewAgentDefaults(pi, ctx),
       toolsEnabled: false,
       allowedTools: "",
-      systemPrompt: REPAIR_AGENT_SYSTEM_PROMPT,
+      systemPrompt: repairSystemPrompt,
     }),
     "--no-extensions",
   ];

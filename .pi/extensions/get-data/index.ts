@@ -42,7 +42,7 @@ const CHILD_GUARD_PATH = fileURLToPath(new URL("../access-mode/child-guard.ts", 
 
 const evidenceSchema = StringEnum(["exact", "dense", "summary"] as const, {
   description:
-    "Evidence density. exact preserves source excerpts/signatures, dense favors compact cited findings, summary is highest level.",
+    "Finding density. Every mode returns verbatim source text with paths and line ranges; exact includes more context, dense is compact, and summary returns fewer findings.",
   default: "dense",
 });
 const bashActionSchema = StringEnum(["read", "write"] as const, {
@@ -121,13 +121,19 @@ function parentInstructions(mode: AccessMode): string {
   const getDataGuidance =
     mode === 1
       ? "- `get_data` is unavailable in mode 1; use direct read/data tools."
-      : "- `get_data` is an optional delegation tool for broad or parallel retrieval. Direct read/data tools remain available and may be more efficient for focused lookups.";
+      : mode === 3
+        ? "- Use `read-many-files-lines` for already-identified files or ranges. Use `get_data` whenever requested data is not already known and locating the exact points of interest requires searching or reasoning; direct `read` is unavailable."
+        : "- Use `get_data` whenever requested data is not already known and locating the exact points of interest requires searching or reasoning. Direct read/data tools remain available for already-identified sources.";
+  const readGuidance =
+    mode === 3
+      ? "- Access mode 3 retains `read-many-files-lines` plus allowed search, index, web, and log tools for focused lookups."
+      : `- Access mode ${mode} permits normal direct read/data tools, including text and image reads, search, index, web, and log tools allowed by the access-mode policy.`;
   const bashGuidance =
     mode === 1
       ? '- Bash is available only with `action="read"`; write actions are blocked.'
       : '- Bash accepts `action="read"` and `action="write"`, classified by primary purpose.';
   return `${PROMPT_MARKER}
-- Access mode ${mode} permits normal direct read/data tools, including text and image reads, search, index, web, and log tools allowed by the access-mode policy.
+${readGuidance}
 ${getDataGuidance}
 ${bashGuidance}
 - In modes 1–3, Bash remains project-scoped and cannot change to an external directory.
@@ -136,14 +142,11 @@ ${PROMPT_END_MARKER}`;
 
 const CHILD_INSTRUCTIONS = `You are the retrieval worker behind the parent agent's get_data tool.
 
-Your job is data acquisition only. Use the available read, search, and read-only diagnostic Bash tools to investigate thoroughly, but do not edit files, run mutating shell commands, change repository state, install dependencies, launch workflows, or delegate to other agents. Obey the inherited access mode and its project-root boundary when project-scoped.
+Your job is data acquisition only. Use the available read, search, and read-only diagnostic Bash tools to investigate thoroughly, but do not edit files, run mutating shell commands, change repository state, install dependencies, launch workflows, or delegate to other agents. The mode-3 restriction on parent direct reads does not apply inside this retrieval worker: you are the \`get_data\` implementation, do not have \`get_data\` yourself, and must use your direct retrieval tools. Obey the inherited access mode and its project-root boundary when project-scoped.
 
 Decide relevance using the parent-context snapshot and the request's relevance criteria. Before finishing, verify important findings against primary sources whenever possible.
 
-Return only an information-dense handoff optimized for another LLM's context. Do not describe your search process or include a prose preamble. Use these source-aware forms where applicable:
-- project code: path:startLine-endLine exactSignature \`dense relevance summary\`
-- web/API: URL#section-or-locator \`dense relevance summary\`
-- command/index evidence: stable-source-or-command-locator \`dense relevance summary\`
+Return only an information-dense handoff optimized for another LLM's context. Do not describe your search process or include a prose preamble. Every finding must include the source path and exact line range followed by the relevant text copied verbatim from that range. Add only a compact relevance note outside the verbatim excerpt. Never replace source evidence with a paraphrase or summary.
 
 End with compact coverage and uncertainty lines. State truncation or incomplete coverage explicitly. Never return raw bulk output when a cited exact excerpt or dense finding is sufficient.
 
@@ -159,7 +162,12 @@ export function parentActiveTools(
   mode: AccessMode = getAccessMode(),
 ): string[] {
   const retained = activeTools.filter((name) => name !== GET_DATA_TOOL_NAME || mode !== 1);
-  const required = mode === 1 ? ["read", "bash"] : ["read", GET_DATA_TOOL_NAME, "bash"];
+  const required =
+    mode === 1
+      ? ["read", "bash"]
+      : mode === 3
+        ? [GET_DATA_TOOL_NAME, "bash"]
+        : ["read", GET_DATA_TOOL_NAME, "bash"];
   return filterToolsForAccessMode([...new Set([...retained, ...required])], mode);
 }
 
@@ -207,8 +215,8 @@ export function buildGetDataPrompt(
     "Scope:",
     scope,
     "",
-    "Return dense cited findings using path:startLine-endLine exactSignature `summary` for project code and equivalent stable locators for other sources.",
-    "If all content is relevant or cannot be formatted densely without losing essential meaning, you may return the complete content verbatim and label it as complete.",
+    "Return every finding as path:startLine-endLine followed by the relevant source text copied verbatim from that exact range and a compact relevance note.",
+    "Never replace source text with a paraphrase or summary. If an entire file is relevant, return it verbatim, label it as complete, and include its full line range.",
     "",
     "## Parent-context snapshot",
     parentContextTruncated
@@ -298,6 +306,17 @@ export function childAccessEnvironment(
   };
 }
 
+export function childExecutionScope(
+  cwd: string,
+  mode: AccessMode,
+  projectRoot: string,
+): { cwd: string; environment: Record<string, string> } {
+  return {
+    cwd,
+    environment: childAccessEnvironment(mode, projectRoot),
+  };
+}
+
 export function childModelArgs(): string[] {
   return ["--model", GET_DATA_CHILD_MODEL, "--thinking", GET_DATA_CHILD_THINKING];
 }
@@ -338,6 +357,7 @@ async function runChild(
   const temporary = await writeChildPrompts(prompt);
   const accessMode = getAccessMode();
   const projectRoot = getAccessProjectRoot(ctx.cwd);
+  const executionScope = childExecutionScope(ctx.cwd, accessMode, projectRoot);
   const args = [
     "--mode",
     "json",
@@ -361,12 +381,12 @@ async function runChild(
     const timeoutMs = positiveIntegerEnv("PI_GET_DATA_CHILD_TIMEOUT_MS", DEFAULT_CHILD_TIMEOUT_MS);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(invocation.command, invocation.args, {
-        cwd: projectRoot,
+        cwd: executionScope.cwd,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
-          ...childAccessEnvironment(accessMode, projectRoot),
+          ...executionScope.environment,
           [CHILD_ENV_KEY]: "1",
           PI_SUBAGENT_ID: `get-data-${ctx.sessionManager.getSessionId()}`,
         },
@@ -555,12 +575,12 @@ function registerGetDataTool(pi: ExtensionAPI): void {
     name: GET_DATA_TOOL_NAME,
     label: "Get Data",
     description:
-      "Optionally delegates broad or parallel file, project, web, API, log, diagnostic, and read-oriented shell investigation to an isolated child Pi and returns a dense cited handoff.",
+      "Use whenever requested data is not already known and finding the exact points of interest requires searching or reasoning. Delegates read-only investigation to an isolated child Pi and returns the relevant source text verbatim with its path and line range.",
     promptSnippet:
-      "Delegate broad or parallel retrieval to an isolated child when that is more efficient than direct read/data tools.",
+      "Use get_data whenever requested data is unknown and finding the exact points of interest requires searching or reasoning; findings include verbatim source text with paths and line ranges.",
     promptGuidelines: [
-      "Direct read/data tools remain available. Use get_data when delegated broad or parallel retrieval would reduce parent context or tool calls.",
-      "If a delegated result is insufficient, call get_data again with a narrower objective or clearer relevance criteria, or use a focused direct read/data tool.",
+      "Call get_data whenever the requested data is not already known and must be located through searching or reasoning.",
+      "If a result is insufficient, call get_data again with a narrower objective or clearer relevance criteria.",
       "Provide enough relevance context for the child to distinguish useful evidence from incidental matches.",
     ],
     parameters: getDataSchema,

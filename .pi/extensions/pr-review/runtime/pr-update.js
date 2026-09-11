@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   prefixTmuxWindowTitleWithPrNumber,
@@ -7,6 +7,7 @@ import {
   showWidget,
 } from "./review.js";
 import { determinePrCreateLabels, updateExistingPr } from "./pr-create.js";
+import { prMetadataAgentOptions } from "./pr-metadata.js";
 import {
   PR_CREATE_AGENT_TIMEOUT_MS,
   applyAgentFileWrites,
@@ -14,7 +15,6 @@ import {
   commandOptions,
   discoverPrForCreate,
   execRequired,
-  fallbackPrCreateDraft,
   fetchExistingPrBody,
   fetchPrCreateGhResult,
   formatMultiplePrCreateDiscovery,
@@ -39,6 +39,10 @@ import {
   validatePrCreateBranch,
   writePrUpdateArtifact,
 } from "./pr-lifecycle-shared.js";
+
+export const PR_DOCS_FIX_AGENT_TIMEOUT_MS = Number(
+  process.env.PI_PR_DOCS_FIX_AGENT_TIMEOUT_MS ?? 7 * 60_000,
+);
 
 export async function runPrUpdateCommand(pi, ctx, args) {
   setStatus(ctx, "⏳:pr-update");
@@ -106,8 +110,19 @@ async function executePrUpdateCommand(pi, ctx, options) {
       labels,
     }),
   );
-  setStatus(ctx, `✅:updated #${prNumber}`);
-  showWidget(ctx, [`PR #${prNumber} updated.`, ...(pr.url ? [pr.url] : [])]);
+  if (metadata.evaluationFailed) {
+    setStatus(ctx, `⚠️:updated #${prNumber}`);
+    showWidget(ctx, [
+      `PR #${prNumber} branch updated, but metadata evaluation failed.`,
+      metadata.reason,
+      ...(pr.url ? [pr.url] : []),
+    ]);
+    if (ctx.hasUI)
+      ctx.ui.notify(`PR #${prNumber} metadata was left unchanged: ${metadata.reason}`, "warning");
+  } else {
+    setStatus(ctx, `✅:updated #${prNumber}`);
+    showWidget(ctx, [`PR #${prNumber} updated.`, ...(pr.url ? [pr.url] : [])]);
+  }
   if (!options.noCiWatch) startPrCreateCiWatcher(pi, ctx, prNumber);
 }
 
@@ -265,53 +280,51 @@ export async function fixPrUpdateStaleDocs(pi, ctx, prNumber) {
     await runPrAnalysis(pi, ctx, prNumber, writePrUpdateArtifact),
   );
   if (!docsValidity.length) return false;
-  const docFiles = [...new Set(docsValidity.map((item) => item.docFile))];
-  const fileContents = await formatProjectFilesForPrompt(ctx, docFiles, 80_000);
-  const prompt = [
-    `Fix stale documentation references for PR #${prNumber}.`,
-    "Tools are disabled. Return complete updated documentation files as JSON; the caller will write them.",
-    "Only update README.md and files under docs/.",
-    "Remove or update stale file paths, renamed commands, or changed config keys. Preserve unrelated wording.",
-    "Return JSON only with this shape:",
-    '{"files":[{"path":"README.md","content":"complete updated file content"}],"summary":"what changed"}',
-    "",
-    "## Stale references",
-    ...docsValidity.map(
-      (item) => `- ${item.docFile}:${item.lineNumber} references ${item.reference}`,
-    ),
-    "",
-    "## Current documentation files",
-    fileContents,
-  ].join("\n");
-  await writePrUpdateArtifact(ctx, "docs-fix-prompt.md", prompt);
-  const systemPrompt =
-    "You fix only stale documentation references. Tools are disabled; return JSON only and never emit tool calls.";
-  const result = await runLifecycleAgent(pi, ctx, "PR-docs", prompt, systemPrompt, 180_000);
-  await writePrUpdateArtifact(ctx, "docs-fix-stdout.txt", result.stdout);
-  await writePrUpdateArtifact(ctx, "docs-fix-stderr.txt", result.stderr);
-  if (result.code !== 0)
-    throw new Error(
-      result.stderr.trim() || result.stdout.trim() || `docs fix agent exited ${result.code}`,
+  const trackedFiles = nonemptyLines(
+    (await execRequired(pi, ctx, "git", ["ls-files"], "git ls-files", 30_000)).stdout,
+  );
+  const referencesByFile = new Map();
+  for (const item of docsValidity) {
+    const current = referencesByFile.get(item.docFile) ?? [];
+    current.push(item);
+    referencesByFile.set(item.docFile, current);
+  }
+
+  const plannedFiles = [];
+  let fileIndex = 0;
+  for (const [docFile, staleReferences] of referencesByFile) {
+    fileIndex += 1;
+    const absolutePath = resolvePrDocsFixPath(ctx, docFile);
+    const currentContent = await readFile(absolutePath, "utf8");
+    const prompt = buildPrDocsFixPrompt(
+      prNumber,
+      docFile,
+      staleReferences,
+      currentContent,
+      trackedFiles,
     );
-  await applyAgentFileWrites(
+    const artifactPrefix = `docs-fix-${fileIndex}-${safeFileName(docFile)}`;
+    const parsed = await runPrDocsFixAgent(pi, ctx, prompt, artifactPrefix, docFile);
+    const nextContent = applyPrDocsFixEdits(
+      currentContent,
+      parsed,
+      docFile,
+      staleReferences.map((item) => item.reference),
+    );
+    plannedFiles.push({ docFile, absolutePath, content: nextContent });
+  }
+
+  for (const plannedFile of plannedFiles)
+    await writeFile(plannedFile.absolutePath, plannedFile.content, "utf8");
+  const changedDocs = plannedFiles.map((plannedFile) => plannedFile.docFile);
+  await execRequired(
+    pi,
     ctx,
-    parseJsonObjectFromOutput(result.stdout),
-    (filePath) => filePath === "README.md" || filePath.startsWith("docs/"),
+    "git",
+    ["add", "--", ...changedDocs],
+    "git add corrected docs",
+    60_000,
   );
-  const changedDocs = nonemptyLines(
-    (
-      await execRequired(
-        pi,
-        ctx,
-        "git",
-        ["status", "--short", "--", "README.md", "docs/"],
-        "git status docs",
-        30_000,
-      )
-    ).stdout,
-  );
-  if (!changedDocs.length) return false;
-  await execRequired(pi, ctx, "git", ["add", "README.md", "docs/"], "git add docs", 60_000);
   await execRequired(
     pi,
     ctx,
@@ -321,6 +334,140 @@ export async function fixPrUpdateStaleDocs(pi, ctx, prNumber) {
     60_000,
   );
   return true;
+}
+
+export function buildPrDocsFixPrompt(
+  prNumber,
+  docFile,
+  staleReferences,
+  currentContent,
+  trackedFiles,
+) {
+  return [
+    `Fix stale documentation references in ${docFile} for PR #${prNumber}.`,
+    "Tools are disabled. Return only minimal exact text replacements; the caller applies them atomically.",
+    "Do not return the complete file and do not change unrelated wording.",
+    "Each oldText must be the smallest useful substring copied byte-for-byte from the current document, must occur exactly once, and must contain the stale reference it fixes.",
+    "Use candidate paths only when they describe the same concept. If no valid successor exists, remove or reword only the obsolete claim.",
+    "Return JSON only with this shape:",
+    '{"edits":[{"oldText":"exact current text","newText":"replacement text"}],"summary":"what changed"}',
+    "",
+    "## Stale references and candidate current paths",
+    ...staleReferences.flatMap((item) => {
+      const candidates = prDocsFixCandidatePaths(item.reference, trackedFiles);
+      return [
+        `- Line ${item.lineNumber}: ${item.reference}`,
+        ...(candidates.length
+          ? candidates.map((candidate) => `  - Candidate: ${candidate}`)
+          : [
+              "  - No likely current path found; remove or narrowly reword the obsolete reference.",
+            ]),
+      ];
+    }),
+    "",
+    "## Current document",
+    `<current_document path=${JSON.stringify(docFile)}>`,
+    currentContent,
+    "</current_document>",
+  ].join("\n");
+}
+
+export function prDocsFixCandidatePaths(reference, trackedFiles) {
+  const normalizedReference = reference.replace(/^\.\//, "");
+  const referenceBaseName = path.posix.basename(normalizedReference);
+  const referenceDirectory = path.posix.dirname(normalizedReference);
+  return trackedFiles
+    .filter((filePath) => filePath !== normalizedReference)
+    .map((filePath) => ({
+      filePath,
+      score:
+        path.posix.basename(filePath) === referenceBaseName
+          ? 2
+          : path.posix.dirname(filePath) === referenceDirectory
+            ? 1
+            : 0,
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort(
+      (first, second) =>
+        second.score - first.score || first.filePath.localeCompare(second.filePath),
+    )
+    .slice(0, 20)
+    .map((candidate) => candidate.filePath);
+}
+
+export async function runPrDocsFixAgent(pi, ctx, prompt, artifactPrefix, docFile) {
+  await writePrUpdateArtifact(ctx, `${artifactPrefix}-prompt.md`, prompt);
+  const systemPrompt =
+    "You fix only the specified stale documentation references with minimal exact replacements. Tools are disabled; return JSON only and never emit tool calls.";
+  const result = await runLifecycleAgent(
+    pi,
+    ctx,
+    "PR-docs",
+    prompt,
+    systemPrompt,
+    PR_DOCS_FIX_AGENT_TIMEOUT_MS,
+  );
+  await writePrUpdateArtifact(ctx, `${artifactPrefix}-stdout.txt`, result.stdout || "");
+  await writePrUpdateArtifact(ctx, `${artifactPrefix}-stderr.txt`, result.stderr || "");
+  if (result.code === 143)
+    throw new Error(
+      `docs fix agent timed out after ${Math.round(PR_DOCS_FIX_AGENT_TIMEOUT_MS / 60_000)} minutes while repairing ${docFile}`,
+    );
+  if (result.code !== 0)
+    throw new Error(
+      result.stderr.trim() ||
+        result.stdout.trim() ||
+        `docs fix agent exited ${result.code} while repairing ${docFile}`,
+    );
+  return parseJsonObjectFromOutput(result.stdout);
+}
+
+export function applyPrDocsFixEdits(content, parsed, docFile, staleReferences) {
+  if (!isRecord(parsed) || !Array.isArray(parsed.edits) || !parsed.edits.length)
+    throw new Error(`docs fix agent returned no valid edits for ${docFile}`);
+  let nextContent = content;
+  const addressedReferences = new Set();
+  for (const edit of parsed.edits) {
+    if (!isRecord(edit) || typeof edit.oldText !== "string" || !edit.oldText)
+      throw new Error(`docs fix agent returned an invalid oldText for ${docFile}`);
+    if (typeof edit.newText !== "string")
+      throw new Error(`docs fix agent returned an invalid newText for ${docFile}`);
+    const matchedReferences = staleReferences.filter((reference) =>
+      edit.oldText.includes(reference),
+    );
+    if (!matchedReferences.length)
+      throw new Error(`docs fix edit for ${docFile} does not contain a reported stale reference`);
+    const occurrences = nextContent.split(edit.oldText).length - 1;
+    if (occurrences !== 1)
+      throw new Error(
+        `docs fix oldText for ${docFile} must occur exactly once; found ${occurrences}`,
+      );
+    if (edit.oldText === edit.newText)
+      throw new Error(`docs fix agent returned a no-op edit for ${docFile}`);
+    nextContent = nextContent.replace(edit.oldText, edit.newText);
+    for (const reference of matchedReferences) addressedReferences.add(reference);
+  }
+  const missingReferences = staleReferences.filter(
+    (reference) => !addressedReferences.has(reference),
+  );
+  if (missingReferences.length)
+    throw new Error(`docs fix agent did not address ${missingReferences.join(", ")} in ${docFile}`);
+  return nextContent;
+}
+
+function resolvePrDocsFixPath(ctx, docFile) {
+  const normalized = docFile.replace(/\\/g, "/");
+  if (
+    normalized !== path.posix.normalize(normalized) ||
+    (normalized !== "README.md" && !normalized.startsWith("docs/"))
+  )
+    throw new Error(`Docs fix path is outside README.md or docs/: ${docFile}`);
+  const absolutePath = path.resolve(ctx.cwd, normalized);
+  const relative = path.relative(ctx.cwd, absolutePath);
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    throw new Error(`Docs fix path escapes the project: ${docFile}`);
+  return absolutePath;
 }
 
 function extractPrUpdateDocsValidity(analysis) {
@@ -362,10 +509,14 @@ async function pushPrUpdateBranch(pi, ctx) {
   return "force-pushed";
 }
 
-async function maybeUpdatePrMetadata(pi, ctx, prNumber, contextData, labels) {
+export async function maybeUpdatePrMetadata(pi, ctx, prNumber, contextData, labels) {
   const decision = await decidePrUpdateMetadata(pi, ctx, contextData, labels);
   if (!decision.shouldUpdate)
-    return { updated: false, reason: decision.reason || "PR scope unchanged" };
+    return {
+      updated: false,
+      evaluationFailed: decision.evaluationFailed === true,
+      reason: decision.reason || "PR scope unchanged",
+    };
   const draft = normalizePrCreateDraft({ title: decision.title, body: decision.body }, "");
   const bodyPath = await writePrUpdateArtifact(
     ctx,
@@ -381,13 +532,11 @@ async function maybeUpdatePrMetadata(pi, ctx, prNumber, contextData, labels) {
   };
 }
 
-async function decidePrUpdateMetadata(pi, ctx, contextData, labels) {
+export async function decidePrUpdateMetadata(pi, ctx, contextData, labels) {
   const prompt = [
-    "Decide whether PR title/body should be updated after syncing this branch with its base.",
-    "Only set shouldUpdate=true if the scope meaningfully changed, the existing metadata is stale, or required sections are missing.",
-    "If updating, use Conventional Commits with capitalized type and include ## Why, ## What, ## Testing, and ## Affected Routes.",
+    "Use the explicitly configured pr-metadata skill in update mode to decide whether the PR title/body should be updated after syncing this branch with its base.",
     "Return JSON only with this shape:",
-    '{"shouldUpdate":true,"reason":"why","title":"Feat(scope): title","body":"markdown body"}',
+    '{"shouldUpdate":true,"reason":"why","title":"pull request title","body":"markdown body"}',
     "",
     buildPrCreateDraftPrompt(contextData, labels, ""),
   ].join("\n");
@@ -397,24 +546,36 @@ async function decidePrUpdateMetadata(pi, ctx, contextData, labels) {
     ctx,
     "PR-metadata",
     prompt,
-    "You make conservative PR metadata update decisions. Return JSON only.",
+    "Load and follow the explicitly configured pr-metadata skill. Make conservative PR metadata update decisions and return JSON only.",
     PR_CREATE_AGENT_TIMEOUT_MS,
+    "off",
+    prMetadataAgentOptions(ctx),
   );
   await writePrUpdateArtifact(ctx, "metadata-decision-stdout.txt", result.stdout);
   await writePrUpdateArtifact(ctx, "metadata-decision-stderr.txt", result.stderr);
-  const fallback = fallbackPrCreateDraft(contextData);
   if (result.code !== 0)
-    return { shouldUpdate: false, reason: "metadata decision agent failed", ...fallback };
+    return {
+      shouldUpdate: false,
+      evaluationFailed: true,
+      reason: "metadata decision agent failed; existing title and body were preserved",
+    };
   const parsed = parseJsonObjectFromOutput(result.stdout);
+  if (!parsed || typeof parsed.shouldUpdate !== "boolean")
+    return {
+      shouldUpdate: false,
+      evaluationFailed: true,
+      reason:
+        "metadata decision agent returned invalid JSON; existing title and body were preserved",
+    };
   return {
     shouldUpdate: parsed?.shouldUpdate === true,
     reason: stringValue(parsed?.reason),
-    title: stringValue(parsed?.title) ?? fallback.title,
-    body: stringValue(parsed?.body) ?? fallback.body,
+    title: stringValue(parsed?.title),
+    body: stringValue(parsed?.body),
   };
 }
 
-function renderPrUpdateReport(details) {
+export function renderPrUpdateReport(details) {
   return [
     "## PR update",
     "",
@@ -433,7 +594,9 @@ function renderPrUpdateReport(details) {
     `Labels: ${details.labels.join(", ") || "none"}`,
     details.metadata.updated
       ? `PR metadata updated: ${details.metadata.reason}${details.metadata.bodyPath ? ` (${details.metadata.bodyPath})` : ""}`
-      : `PR metadata unchanged: ${details.metadata.reason}`,
+      : details.metadata.evaluationFailed
+        ? `PR metadata evaluation failed; title and body left unchanged: ${details.metadata.reason}`
+        : `PR metadata unchanged: ${details.metadata.reason}`,
     "CI watcher started in the background unless --no-ci-watch was used.",
   ]
     .filter(Boolean)

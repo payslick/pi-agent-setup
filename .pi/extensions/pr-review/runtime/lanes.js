@@ -12,6 +12,11 @@ const laneDefinitions = [
     score: () => 100,
   },
   {
+    laneId: "pr-metadata",
+    title: "PR metadata",
+    score: () => 98,
+  },
+  {
     laneId: "relevance",
     title: "Relevance",
     score: () => 96,
@@ -186,6 +191,9 @@ export function buildLaneReviewPrompt(pr, packet, artifacts) {
     `Base: ${pr.base.ref} (${pr.base.sha || "unknown"})`,
     `Head: ${pr.head.ref} (${pr.head.sha || "unknown"})`,
     "",
+    ...(packet.laneId === "pr-metadata"
+      ? ["## Complete commit history", ...formatPrCommits(pr.commits), ""]
+      : []),
     designRulesPrompt(),
     "- Return only concrete, actionable findings backed by the diff below.",
     "- Do not ask for broad rewrites; keep suggestions scoped to the changed code.",
@@ -219,7 +227,7 @@ export function buildLaneReviewPrompt(pr, packet, artifacts) {
       : ["No shared artifact directory was provided."]),
     "",
     "## Tool boundaries",
-    "- Use `read` or `read-many-files-lines` for exact known paths and line ranges. Reserve `get_data` for bounded cross-file investigation when the diff and direct reads are insufficient.",
+    "- Use `read-many-files-lines` for bounded file-content retrieval; request only the minimum necessary line ranges.",
     "- Additional web and project-index tools may be enabled by the caller; use only tools listed for this agent.",
     "- Do not use Bash unless the system prompt explicitly grants the CI-analysis lane its restricted GitHub CLI policy.",
     artifacts
@@ -229,15 +237,32 @@ export function buildLaneReviewPrompt(pr, packet, artifacts) {
     "## Changed files",
     ...packet.files.map((file) => `- ${file.path} (${file.status})`),
     "",
-    "## Diff hunks",
-    artifacts
-      ? `Diff hunks are also stored in ${artifacts.laneDir}/hunks.json. The shared patch is at ${artifacts.sharedDir}/patch.diff if tools are enabled.`
-      : "Inline diff hunks follow.",
-    formatHunks(packet.hunks),
+    packet.laneId === "pr-metadata" ? "## Complete reviewable diff" : "## Diff hunks",
+    ...(packet.laneId === "pr-metadata" && artifacts?.fullPatch !== undefined
+      ? [
+          `This is the complete reviewable patch also stored at ${artifacts.sharedDir}/patch.diff:`,
+          artifacts.fullPatch || "(empty patch)",
+        ]
+      : [
+          artifacts
+            ? `Diff hunks are also stored in ${artifacts.laneDir}/hunks.json. The shared patch is at ${artifacts.sharedDir}/patch.diff if tools are enabled.`
+            : "Inline diff hunks follow.",
+          formatHunks(packet.hunks),
+        ]),
     "",
     "Return JSON only with this shape:",
-    '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"startLine":120,"endLine":123,"functionName":"name","title":"short point","body":"at most two short sentences","confidence":0.8,"replacement":"exact raw replacement code","example":{"language":"ts","code":"illustrative raw code"}}]}',
+    packet.laneId === "pr-metadata"
+      ? '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"documentation|question","title":"short point","body":"at most two short sentences","confidence":0.8}]}'
+      : '{"findings":[{"severity":"blocker|high|medium|low|nit","type":"bug|security|performance|maintainability|test|documentation|style|question","path":"file","line":123,"startLine":120,"endLine":123,"functionName":"name","title":"short point","body":"at most two short sentences","confidence":0.8,"replacement":"exact raw replacement code","example":{"language":"ts","code":"illustrative raw code"}}]}',
   ].join("\n");
+}
+
+function formatPrCommits(commits) {
+  if (!commits?.length) return ["No commits were returned for this comparison."];
+  return commits.flatMap((commit) => [
+    `### ${commit.sha || "unknown SHA"} — ${commit.title}`,
+    ...(commit.body ? [commit.body] : []),
+  ]);
 }
 
 function diffLinePrefix(kind) {

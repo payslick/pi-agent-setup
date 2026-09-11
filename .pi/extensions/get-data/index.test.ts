@@ -19,6 +19,7 @@ import getDataExtension, {
   appendGetDataInstructions,
   buildGetDataPrompt,
   childAccessEnvironment,
+  childExecutionScope,
   childIsolationArgs,
   childModelArgs,
   GET_DATA_CHILD_MODEL,
@@ -30,6 +31,9 @@ import getDataExtension, {
 
 interface CapturedTool {
   name: string;
+  description?: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   parameters: {
     required?: string[];
     properties?: Record<string, unknown>;
@@ -103,7 +107,12 @@ describe("parent data-tool policy", () => {
       "bash",
     ]);
     expect(parentActiveTools(configured, 3)).toEqual([
-      ...directTools,
+      "grep",
+      "find",
+      "ls",
+      "read-many-files-lines",
+      "project_index_search",
+      "web_search",
       GET_DATA_TOOL_NAME,
       "write",
       "debug_ui_start",
@@ -123,7 +132,6 @@ describe("parent data-tool policy", () => {
   test("does not duplicate required parent tools", () => {
     expect(parentActiveTools([GET_DATA_TOOL_NAME, "read", "bash"], 3)).toEqual([
       GET_DATA_TOOL_NAME,
-      "read",
       "bash",
     ]);
   });
@@ -143,14 +151,16 @@ describe("parent prompt guidance", () => {
     expect(modeOne).toContain('Bash is available only with `action="read"`');
     expect(modeOne).toContain("cannot change to an external directory");
     expect(modeTwo).toContain("Access mode 2");
-    expect(modeTwo).toContain("`get_data` is an optional delegation tool");
+    expect(modeTwo).toContain("Use `get_data` whenever requested data is not already known");
     expect(modeTwo).toContain("Direct read/data tools remain available");
     expect(modeTwo).not.toContain("Access mode 1");
     expect(modeThree).toContain("Access mode 3");
-    expect(modeThree).toContain("`get_data` is an optional delegation tool");
+    expect(modeThree).toContain("Use `read-many-files-lines` for already-identified files");
+    expect(modeThree).toContain("Use `get_data` whenever requested data is not already known");
+    expect(modeThree).toContain("direct `read` is unavailable");
     expect(modeThree).not.toContain("Access mode 2");
     expect(modeFour).toContain("Access mode 4");
-    expect(modeFour).toContain("`get_data` is an optional delegation tool");
+    expect(modeFour).toContain("Use `get_data` whenever requested data is not already known");
     expect(unchanged).toBe(modeFour);
   });
 });
@@ -174,6 +184,16 @@ describe("child extension isolation", () => {
     expect(childAccessEnvironment(2, "/project")).toEqual({
       [ACCESS_MODE_ENV]: "2",
       [ACCESS_PROJECT_ROOT_ENV]: "/project",
+    });
+  });
+
+  test("starts the child in the caller cwd while retaining the access-policy root", () => {
+    expect(childExecutionScope("/project/repository/.pi", 3, "/project")).toEqual({
+      cwd: "/project/repository/.pi",
+      environment: {
+        [ACCESS_MODE_ENV]: "3",
+        [ACCESS_PROJECT_ROOT_ENV]: "/project",
+      },
     });
   });
 
@@ -259,9 +279,11 @@ describe("child retrieval prompt", () => {
     expect(prompt).toContain("- official documentation");
     expect(prompt).toContain("Evidence mode: exact");
     expect(prompt).toContain("Maximum findings: 7");
-    expect(prompt).toContain("path:startLine-endLine exactSignature");
+    expect(prompt).toContain("path:startLine-endLine");
+    expect(prompt).toContain("source text copied verbatim from that exact range");
+    expect(prompt).toContain("Never replace source text with a paraphrase or summary");
     expect(prompt).toContain("Complete compaction-aware parent context");
-    expect(prompt).toContain("you may return the complete content verbatim");
+    expect(prompt).toContain("return it verbatim, label it as complete");
     expect(prompt).toContain("[User]: Existing task context");
   });
 
@@ -299,6 +321,13 @@ describe("extension registration", () => {
     expect(capture.events).toEqual(["session_start", "session_tree", "before_agent_start"]);
 
     const getData = capture.tools[0]!;
+    expect(getData.description).toContain(
+      "whenever requested data is not already known and finding the exact points of interest requires searching or reasoning",
+    );
+    expect(getData.description).toContain(
+      "returns the relevant source text verbatim with its path and line range",
+    );
+    expect(getData.promptSnippet).toContain("findings include verbatim source text");
     expect(getData.parameters.required).toEqual(["objective", "relevance"]);
     expect(getData.parameters.properties).toHaveProperty("scope");
     expect(getData.renderCall).toBeFunction();

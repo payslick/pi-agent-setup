@@ -245,11 +245,28 @@ function hasRawShellWrappedFileRead(command: string): boolean {
   );
 }
 
-function hasBashFileReader(command: string): boolean {
+function isPipedOutputLimiter(words: string[]): boolean {
+  const runnableWords = unwrapWrapper(words);
+  const commandName = normalizeCommandName(runnableWords[0] ?? "");
+  if (commandName !== "head" && commandName !== "tail") return false;
+
+  return runnableWords.slice(1).every((word, index, args) => {
+    if (word.startsWith("-")) return true;
+    return /^\+?\d+$/.test(word) && ["-n", "--lines"].includes(args[index - 1] ?? "");
+  });
+}
+
+export function hasBashFileReader(command: string): boolean {
   if (hasRawShellWrappedFileRead(command)) return true;
-  return commandSegments(tokenizeShell(command)).some((segment) => {
+
+  const tokens = tokenizeShell(command);
+  let segment: string[] = [];
+  let receivesPipedInput = false;
+
+  function segmentReadsFile(): boolean {
     const words = unwrapWrapper(segment);
     const commandName = normalizeCommandName(words[0] ?? "");
+    if (receivesPipedInput && isPipedOutputLimiter(words)) return false;
     if (
       shellWrapperCommands.has(commandName) &&
       words.some((word) => fileReaderCommands.has(normalizeCommandName(word)))
@@ -257,7 +274,19 @@ function hasBashFileReader(command: string): boolean {
       return true;
     }
     return fileReaderCommands.has(commandName);
-  });
+  }
+
+  for (const token of tokens) {
+    if (token.operator && commandBreakers.has(token.text)) {
+      if (segment.length > 0 && segmentReadsFile()) return true;
+      segment = [];
+      receivesPipedInput = token.text === "|";
+      continue;
+    }
+    if (!token.operator) segment.push(token.text);
+  }
+
+  return segment.length > 0 && segmentReadsFile();
 }
 
 function shellQuote(word: string): string {

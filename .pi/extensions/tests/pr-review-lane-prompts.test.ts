@@ -6,6 +6,7 @@ const reviewAgentRuntime = await import("../pr-review/runtime/review-agents.js")
 const reviewArtifactRuntime = await import("../pr-review/runtime/artifacts.js");
 
 const {
+  buildReviewAgentArguments,
   buildReviewLaneSystemPrompt,
   DEFAULT_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS,
   DEFAULT_REVIEW_AGENT_TIMEOUT_MS,
@@ -23,6 +24,7 @@ const {
 describe("PR review lane prompts and tool policy", () => {
   test("assembles shared policy and specialized lane requirements", () => {
     const testsPrompt = buildReviewLaneSystemPrompt("tests", true);
+    const metadataPrompt = buildReviewLaneSystemPrompt("pr-metadata", true);
     const architecturePrompt = buildReviewLaneSystemPrompt("architecture", true);
     const performancePrompt = buildReviewLaneSystemPrompt("performance", true);
     const codeQualityPrompt = buildReviewLaneSystemPrompt("code-quality", true);
@@ -33,20 +35,31 @@ describe("PR review lane prompts and tool policy", () => {
     expect(testsPrompt).toContain("setup, action, and expected assertion");
     expect(testsPrompt).toContain("plausible production regression");
     expect(testsPrompt).toContain("exact existing utility");
+    expect(testsPrompt).toContain("database as a black box");
+    expect(testsPrompt).toContain("change and inspect application state through existing APIs or controllers");
+    expect(testsPrompt).toContain("Builders are the only test utilities allowed to access the database directly");
+    expect(testsPrompt).toContain("Before adding a builder, inspect the existing builders");
+    expect(testsPrompt).toContain("New builders are tested and provide sensible default values");
+    expect(testsPrompt).toContain("Test helpers never access the database directly unless they are builders");
+    expect(testsPrompt).toContain("do not introduce lint-rule disable directives");
+    expect(testsPrompt).toContain("reuse existing testing utilities rather than reimplementing");
     expect(testsPrompt).toContain("type-system guarantees, trivial assignments");
-    expect(testsPrompt).toContain("Use `read` or `read-many-files-lines`");
-    expect(testsPrompt).toContain("Reserve `get_data` for bounded cross-file investigation");
+    expect(testsPrompt).toContain("Use `read-many-files-lines` for bounded file-content retrieval");
+    expect(testsPrompt).toContain("Request only the minimum necessary line ranges");
     expect(testsPrompt).toContain("do not inspect testing guides");
     expect(testsPrompt).toContain("when a concrete candidate depends on that context");
     expect(testsPrompt).toContain("directory named `drizzle` at any depth");
     expect(testsPrompt).toContain("file with a `.sql` extension (case-insensitive)");
-    expect(testsPrompt).toContain("Do not use `get_data` to access them directly or indirectly");
     expect(testsPrompt).toContain(
-      "exclude them from every `get_data` objective, scope, and request",
+      "Do not use `read-many-files-lines` to access them directly or indirectly",
     );
+    expect(testsPrompt).toContain("exclude them from every `read-many-files-lines` request");
     expect(testsPrompt).toContain(`Call \`${REVIEW_AGENT_PARTIAL_FINDING_TOOL}\` once`);
     expect(testsPrompt).toContain("Before requesting more evidence, record every finding");
-    expect(testsPrompt).toContain("Do not call `get_data` merely to reread the packet");
+    expect(testsPrompt).toContain(
+      "Do not call `read-many-files-lines` merely to reread the packet",
+    );
+    expect(testsPrompt).not.toContain("get_data");
     expect(testsPrompt).toContain("Assume the supplied diff is the latest data");
     expect(testsPrompt).toContain(
       "Read repository files only when the diff is insufficient to review a specific hunk",
@@ -54,10 +67,15 @@ describe("PR review lane prompts and tool policy", () => {
     expect(testsPrompt).toContain(
       "Request additional context sparingly and ask for the minimum necessary line range",
     );
-    expect(testsPrompt).toContain("only after identifying a concrete candidate finding");
+    expect(testsPrompt).toContain("after identifying a concrete candidate finding");
     expect(testsPrompt).toContain("Prefer one consolidated, narrowly scoped request");
-    expect(testsPrompt).toContain("After a tool timeout or failure, do not retry");
+    expect(testsPrompt).toContain("After a tool timeout or failure, take its output seriously");
+    expect(testsPrompt).toContain("find another way to bypass the failure");
+    expect(testsPrompt).toContain("even when it requires rethinking your approach");
     expect(testsPrompt).toContain("Bash is intentionally unavailable");
+    expect(metadataPrompt).toContain("Load and follow the explicitly configured `pr-metadata` skill");
+    expect(metadataPrompt).toContain('"type":"documentation|question"');
+    expect(metadataPrompt).not.toContain('"path":"file"');
     expect(architecturePrompt).toContain("`ServerError` subclass, which derives from `TRPCError`");
     expect(architecturePrompt).toContain("database schema → API Zod schema → form schema");
     expect(architecturePrompt).toContain("`any`, `unknown`, `Record<string, unknown>`");
@@ -102,23 +120,43 @@ describe("PR review lane prompts and tool policy", () => {
     expect(defaultPolicy).toEqual({
       toolsEnabled: true,
       allowedTools: [
-        "get_data",
         REVIEW_AGENT_PARTIAL_FINDING_TOOL,
         "read",
         "read-many-files-lines",
       ].join(","),
     });
-    expect(dedupePolicy.allowedTools.split(",")).toContain("get_data");
+    expect(dedupePolicy.allowedTools.split(",")).toContain("read-many-files-lines");
+    expect(dedupePolicy.allowedTools.split(",")).not.toContain("get_data");
     expect(dedupePolicy.allowedTools.split(",")).not.toContain("bash");
     expect(ciPolicy.allowedTools.split(",")).toEqual([
-      "get_data",
       REVIEW_AGENT_PARTIAL_FINDING_TOOL,
       "read",
       "read-many-files-lines",
       "bash",
     ]);
-    expect(fullPolicy.allowedTools.split(",")).toContain("get_data");
+    expect(fullPolicy.allowedTools.split(",")).toContain("read-many-files-lines");
+    expect(fullPolicy.allowedTools.split(",")).not.toContain("get_data");
     expect(fullPolicy.allowedTools.split(",")).not.toContain("bash");
+  });
+
+  test("loads only the explicit skill for the metadata lane", () => {
+    const args = buildReviewAgentArguments(
+      { cwd: "/repo" },
+      {
+        laneId: "pr-metadata",
+        thinking: "high",
+        toolsEnabled: true,
+        allowedTools: "read,read-many-files-lines",
+        systemPrompt: "system",
+        skillPath: "/repo/.pi/skills/pr-metadata/SKILL.md",
+      },
+    );
+
+    expect(args.slice(args.indexOf("--no-skills"), args.indexOf("--no-skills") + 3)).toEqual([
+      "--no-skills",
+      "--skill",
+      "/repo/.pi/skills/pr-metadata/SKILL.md",
+    ]);
   });
 
   test("limits CI-analysis Bash to direct read-only GitHub CI inspection", () => {
@@ -163,5 +201,15 @@ describe("PR review lane prompts and tool policy", () => {
     expect(reviewAgentToolGuardSource("tmp/session/tests", "tmp/session/shared")).toContain(
       "const allowCiAnalysisGhBash = false;",
     );
+    const metadataGuard = reviewAgentToolGuardSource(
+      "tmp/session/pr-metadata",
+      "tmp/session/shared",
+      {
+        partialFindingsFile: "tmp/session/pr-metadata/partial-findings.jsonl",
+        allowUnlocatedFindings: true,
+      },
+    );
+    expect(metadataGuard).toContain('required: ["severity","type","title","body"]');
+    expect(metadataGuard).toContain('typeof finding.path === "string"');
   });
 });
