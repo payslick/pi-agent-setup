@@ -1,14 +1,13 @@
-import { spawn } from "node:child_process";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  SessionEntry,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import { ACCESS_MODE_STATUS_KEY } from "./access-mode";
+import {
+  recentUserMessages,
+  userMessageText,
+  WorkingSummary,
+  type SummaryExecutor,
+} from "./context-summary/summary";
 import { PREFIX_STATUS_KEY } from "./prefix-mode/registry";
 import { SESSION_SEARCH_STATUS_KEY } from "./prefix-mode/session-search";
 
@@ -16,36 +15,12 @@ const SUMMARY_KEY = "context-summary-footer";
 const CODEX_STATUS_KEY = "codex-usage";
 const VIM_STATUS_KEY = "vim-motion";
 const BRANCH_PR_STATUS_KEY = "branch-pr";
-const REFRESH_EVERY_AGENT_TURNS = Number(process.env.PI_CTX_SUMMARY_EVERY ?? 3);
-const SUMMARY_TIMEOUT_MS = Number(process.env.PI_CTX_SUMMARY_TIMEOUT_MS ?? 20_000);
-const SUMMARY_MODEL = process.env.PI_CTX_SUMMARY_MODEL || "openai-codex/gpt-5.5";
-const SUMMARY_THINKING = process.env.PI_CTX_SUMMARY_THINKING || "low";
-const RECENT_USER_TURNS = Number(process.env.PI_CTX_SUMMARY_RECENT_USER_TURNS ?? 4);
-const MAX_USER_SAID_CHARS = 4_000;
-const MAX_SUMMARY_CHARS = 180;
 
-let summaryText = "Starting up…";
-let agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
-let summarizeInFlight = false;
-let pendingSummaryRequest: SummaryRequest | undefined;
-let sessionGeneration = 0;
-let requestFooterRender: (() => void) | undefined;
-let lastPrompt = "";
-let thinkingLevel = "";
-
-interface SummaryRequest {
-  said: string;
-  fallback: string;
-  cwd: string;
-  signal: AbortSignal | undefined;
-  generation: number;
-}
-
-interface CommandResult {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  timedOut: boolean;
+interface FooterState {
+  summary: WorkingSummary;
+  width: number;
+  thinkingLevel: string;
+  requestRender: () => void;
 }
 
 const ESC = String.fromCharCode(27);
@@ -81,179 +56,6 @@ export const resolvePrefixFooterLines = (
   const lines = text.split(/\r?\n/).map(oneLine).filter(Boolean);
   return lines.length ? lines : undefined;
 };
-
-function trimSentence(text: string): string {
-  const line = oneLine(text).replace(/^(["'`]+)|(["'`]+)$/g, "");
-  if (!line) return "Active coding session.";
-  const withoutPrefix = line.replace(/^session context:\s*/i, "");
-  return withoutPrefix.length > MAX_SUMMARY_CHARS
-    ? `${withoutPrefix.slice(0, MAX_SUMMARY_CHARS - 1).trim()}…`
-    : withoutPrefix;
-}
-
-function messageText(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "text" in part && typeof part.text === "string")
-          return part.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join(" ");
-  }
-  return "";
-}
-
-function userSaid(ctx: ExtensionContext): string {
-  const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-  const userTurns = entries
-    .filter(
-      (entry): entry is Extract<SessionEntry, { type: "message" }> =>
-        entry.type === "message" && entry.message.role === "user",
-    )
-    .map((entry) => oneLine(messageText(entry.message)))
-    .filter(Boolean);
-
-  const recent = userTurns.slice(-Math.max(1, RECENT_USER_TURNS));
-  const current = oneLine(lastPrompt);
-  if (current && current !== recent.at(-1)) recent.push(current);
-
-  const lines = recent.map((text, index) => `user turn ${index + 1}: ${text}`);
-  const text = lines.join("\n");
-  return text.length > MAX_USER_SAID_CHARS ? text.slice(-MAX_USER_SAID_CHARS) : text;
-}
-
-function runPiSummarizer(
-  prompt: string,
-  cwd: string,
-  signal: AbortSignal | undefined,
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    const args = [
-      "--print",
-      "--mode",
-      "text",
-      "--model",
-      SUMMARY_MODEL,
-      "--thinking",
-      SUMMARY_THINKING,
-      "--no-tools",
-      "--no-extensions",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
-      "--no-session",
-      "--system-prompt",
-      "You summarize recent user requests in coding sessions. Reply with exactly one short sentence, no markdown.",
-      prompt,
-    ];
-
-    const child = spawn(process.env.PI_CTX_SUMMARY_PI_BIN || "pi", args, {
-      cwd,
-      env: {
-        ...process.env,
-        PI_OFFLINE: process.env.PI_CTX_SUMMARY_OFFLINE ?? process.env.PI_OFFLINE,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let settled = false;
-    let timedOut = false;
-
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      resolve({
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        code,
-        timedOut,
-      });
-    };
-    const abort = () => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    };
-    const timeout = setTimeout(abort, SUMMARY_TIMEOUT_MS);
-    timeout.unref?.();
-    signal?.addEventListener("abort", abort, { once: true });
-
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", () => finish(1));
-    child.on("close", finish);
-  });
-}
-
-function heuristicSummary(ctx: ExtensionContext): string {
-  const entries = ctx.sessionManager.getBranch() as SessionEntry[];
-  const userTexts = entries
-    .filter(
-      (entry): entry is Extract<SessionEntry, { type: "message" }> =>
-        entry.type === "message" && entry.message.role === "user",
-    )
-    .map((entry) => oneLine(messageText(entry.message)))
-    .filter(Boolean);
-  const latest = lastPrompt.trim() || userTexts.at(-1) || "active coding session";
-  return trimSentence(latest);
-}
-
-function createSummaryRequest(ctx: ExtensionContext): SummaryRequest {
-  return {
-    said: userSaid(ctx),
-    fallback: heuristicSummary(ctx),
-    cwd: ctx.cwd,
-    signal: ctx.signal,
-    generation: sessionGeneration,
-  };
-}
-
-function applySummary(request: SummaryRequest, value: string): void {
-  if (request.generation !== sessionGeneration) return;
-  summaryText = value;
-}
-
-async function processSummaryRequest(request: SummaryRequest): Promise<void> {
-  summarizeInFlight = true;
-  agentTurnsSinceRefresh = 0;
-  try {
-    if (!request.said.trim()) {
-      applySummary(request, request.fallback);
-      return;
-    }
-    const prompt = `Summarize the user's last few turns into exactly one short sentence for a footer reminder. Use only the user turns below (ignore assistant/tool context).\n\nRecent user turns:\n${request.said}`;
-    const result = await runPiSummarizer(prompt, request.cwd, request.signal);
-    const nextSummary =
-      result.code === 0 && result.stdout.trim() ? trimSentence(result.stdout) : request.fallback;
-    applySummary(request, nextSummary);
-  } catch {
-    applySummary(request, request.fallback);
-  } finally {
-    summarizeInFlight = false;
-    requestFooterRender?.();
-    const pending = pendingSummaryRequest;
-    pendingSummaryRequest = undefined;
-    if (pending) void processSummaryRequest(pending);
-  }
-}
-
-async function refreshSummary(ctx: ExtensionContext, force = false): Promise<void> {
-  if (!ctx.hasUI) return;
-  if (!force && agentTurnsSinceRefresh < REFRESH_EVERY_AGENT_TURNS) return;
-  const request = createSummaryRequest(ctx);
-  if (summarizeInFlight) {
-    pendingSummaryRequest = request;
-    return;
-  }
-  await processSummaryRequest(request);
-}
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -324,18 +126,20 @@ const renderPrefixFooter = (
   );
 };
 
-function installFooter(ctx: ExtensionContext): void {
+function installFooter(ctx: ExtensionContext, state: FooterState): void {
   if (!ctx.hasUI) return;
   ctx.ui.setFooter((tui, theme, footerData) => {
-    requestFooterRender = () => tui.requestRender();
+    state.width = tui.terminal?.columns ?? state.width;
+    state.requestRender = () => tui.requestRender();
     const unsub = footerData.onBranchChange(() => tui.requestRender());
     return {
       dispose() {
         unsub();
-        if (requestFooterRender) requestFooterRender = undefined;
+        state.requestRender = () => {};
       },
       invalidate() {},
       render(width: number): string[] {
+        state.width = width;
         const { input, output, cost } = footerUsage(ctx);
         const statusEntries = Array.from(footerData.getExtensionStatuses().entries()).filter(
           ([key]) => key !== SUMMARY_KEY,
@@ -347,8 +151,8 @@ function installFooter(ctx: ExtensionContext): void {
         const searchStatus = statusEntries.find(([key]) => key === SESSION_SEARCH_STATUS_KEY)?.[1];
         let cwd = formatCwd(ctx.sessionManager.getCwd());
         const branch = footerData.getGitBranch();
-        if (branch) cwd = `${cwd} (${branch})`;
-        if (prStatus) cwd = `${cwd} ${prStatus}`;
+        const branchLabel = prStatus ?? branch?.replace(/^omry\//, "");
+        if (branchLabel) cwd = `${cwd} ${branchLabel}`;
         const sessionName = ctx.sessionManager.getSessionName();
         if (sessionName) cwd = `${cwd} • ${sessionName}`;
         const sessionId = ctx.sessionManager.getSessionId();
@@ -380,7 +184,7 @@ function installFooter(ctx: ExtensionContext): void {
           .filter(Boolean)
           .join(theme.fg("dim", " "));
         const model = ctx.model?.id || "no-model";
-        const effort = thinkingLevel;
+        const effort = state.thinkingLevel;
         const modelEffort = effort ? `${model} ${effort}` : model;
         const effortSuffix = effort ? ` ${brightWhite(effort)}` : "";
         const pad = " ".repeat(
@@ -391,12 +195,11 @@ function installFooter(ctx: ExtensionContext): void {
           width,
         );
 
-        const lines = [
-          truncateToWidth(
-            theme.fg("accent", resolveFooterTopLine(summaryText, searchStatus)),
-            width,
-            theme.fg("dim", "..."),
-          ),
+        const topLine = resolveFooterTopLine(state.summary.render(width), searchStatus);
+        const lines = topLine
+          ? [truncateToWidth(theme.fg("accent", topLine), width, theme.fg("dim", "..."))]
+          : [];
+        lines.push(
           alignSides(
             theme.fg("dim", cwd),
             theme.fg("dim", sessionId),
@@ -404,7 +207,7 @@ function installFooter(ctx: ExtensionContext): void {
             theme.fg("dim", "..."),
           ),
           statsLine,
-        ];
+        );
 
         const statuses = secondaryFooterStatuses(statusEntries, vimStatus);
         if (statuses.length || accessStatus)
@@ -422,37 +225,53 @@ function installFooter(ctx: ExtensionContext): void {
   });
 }
 
-export default function contextSummaryFooter(pi: ExtensionAPI): void {
+export default function contextSummaryFooter(pi: ExtensionAPI, execute?: SummaryExecutor): void {
+  const state: FooterState = {
+    summary: new WorkingSummary(() => state.requestRender(), execute),
+    width: 80,
+    thinkingLevel: "",
+    requestRender: () => {},
+  };
+  let working = false;
+  let lastPrompt = "";
+  const startSummary = (ctx: ExtensionContext, prompt: string) => {
+    if (!ctx.hasUI) return;
+    working = true;
+    const messages = recentUserMessages(ctx.sessionManager.getBranch(), prompt);
+    lastPrompt = messages.at(-1) ?? "";
+    state.summary.start(messages, ctx.cwd, state.width);
+  };
+  const stopSummary = () => {
+    working = false;
+    lastPrompt = "";
+    state.summary.stop();
+  };
+
   pi.on("session_start", (_event, ctx) => {
-    sessionGeneration += 1;
-    summaryText = heuristicSummary(ctx);
-    agentTurnsSinceRefresh = REFRESH_EVERY_AGENT_TURNS;
-    thinkingLevel = pi.getThinkingLevel();
-    installFooter(ctx);
-    void refreshSummary(ctx, true);
+    stopSummary();
+    state.thinkingLevel = pi.getThinkingLevel();
+    installFooter(ctx, state);
   });
 
   pi.on("thinking_level_select", (event) => {
-    thinkingLevel = event.level;
-    requestFooterRender?.();
+    state.thinkingLevel = event.level;
+    state.requestRender();
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
-    lastPrompt = event.prompt;
-    if (summaryText === "Starting up…") summaryText = heuristicSummary(ctx);
-    requestFooterRender?.();
+  pi.on("before_agent_start", (event, ctx) => startSummary(ctx, event.prompt));
+  pi.on("agent_start", (_event, ctx) => {
+    if (!working) startSummary(ctx, "");
   });
-
-  pi.on("agent_end", async (_event, ctx) => {
-    agentTurnsSinceRefresh += 1;
-    await refreshSummary(ctx);
+  pi.on("message_start", (event, ctx) => {
+    if (!working) return;
+    const prompt = userMessageText(event.message);
+    if (prompt && prompt !== lastPrompt) startSummary(ctx, prompt);
   });
+  pi.on("agent_settled", stopSummary);
 
   pi.on("session_shutdown", (_event, ctx) => {
-    sessionGeneration += 1;
-    pendingSummaryRequest = undefined;
+    stopSummary();
     if (ctx.hasUI) ctx.ui.setFooter(undefined);
-    requestFooterRender = undefined;
-    lastPrompt = "";
+    state.requestRender = () => {};
   });
 }
