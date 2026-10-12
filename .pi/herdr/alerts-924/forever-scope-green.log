@@ -1,0 +1,28 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-dismissal.test.tsx:
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in en [729.34ms]
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in he [231.16ms]
+(pass) payroll finding dismissal > retains the default Review label when a CTA has no custom label [225.00ms]
+(pass) payroll finding dismissal > offers Review, other CTAs, dismissal and notes in one compact actions popover [207.28ms]
+(pass) payroll finding dismissal > labels a single document CTA Review [374.75ms]
+(pass) payroll finding dismissal > returns saved notes with their authors only on the matching alert in list and get [551.88ms]
+(pass) payroll finding dismissal > clears an inline note draft without saving and shows submitted notes after remount [1045.00ms]
+(pass) payroll finding dismissal > dismisses a restored finding with only a reason and focuses the surviving control [613.58ms]
+(pass) payroll finding dismissal > shows persisted notes and undoes one decision while the other stays dismissed [213.44ms]
+(pass) payroll finding dismissal > accepts a corrected mandatory note without documents [190.78ms]
+(pass) payroll finding dismissal > offers months and Forever and saves twelve months for the named company without an upload [234.89ms]
+(pass) payroll finding dismissal > locks Forever Exact issue to the employee after a company selection [234.86ms]
+(pass) payroll finding dismissal > saves Forever Alert type for the selected company [209.44ms]
+(pass) payroll finding dismissal > keeps a reason mandatory when dismissing without files [127.50ms]
+(pass) payroll finding dismissal > localizes the QA category in en instead of showing its internal check ID [100.22ms]
+(pass) payroll finding dismissal > localizes the QA category in he instead of showing its internal check ID [96.52ms]
+
+tests/integration/hooks/usePayrollAlerts.test.tsx:
+(pass) usePayrollAlerts real API integration > refreshes list/counts after note-only dismissal and selected undo [324.82ms]
+(pass) usePayrollAlerts real API integration > suppresses items and counts while exact-revision readiness is Running [84.06ms]
+
+ 18 pass
+ 0 fail
+ 138 expect() calls
+Ran 18 tests across 2 files. [10.98s]

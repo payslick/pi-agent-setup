@@ -1,0 +1,224 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-dismissal.test.tsx:
+(pass) payroll finding dismissal > renders distinct translated QA CTA labels in en [2973.38ms]
+(pass) payroll finding dismissal > renders distinct translated QA CTA labels in he [3028.69ms]
+(pass) payroll finding dismissal > retains the default Review label when a CTA has no custom label [2770.00ms]
+(pass) payroll finding dismissal > shows persisted notes and undoes one decision while the other stays dismissed [3193.39ms]
+(pass) payroll finding dismissal > accepts a corrected mandatory note without documents [2386.12ms]
+(pass) payroll finding dismissal > offers only month durations and saves twelve months for the named company without an upload [1890.64ms]
+(pass) payroll finding dismissal > keeps a reason mandatory when dismissing without files [148.37ms]
+(pass) payroll finding dismissal > localizes the QA category in en instead of showing its internal check ID [113.17ms]
+(pass) payroll finding dismissal > localizes the QA category in he instead of showing its internal check ID [105.58ms]
+
+tests/unit/components/header-month-picker-close.test.ts:
+(pass) header month switch warning transition > keeps the same dialog mounted while confirmation swaps back to pending close work [0.06ms]
+(pass) header month close warning acknowledgement > does not close when warning confirmation is canceled [0.74ms]
+(pass) header month close warning acknowledgement > acknowledges exactly the warning fence after confirmation [0.07ms]
+(pass) header month close warning acknowledgement > re-presents refreshed warnings when the confirmed warning fence changes [0.07ms]
+(pass) header month close warning acknowledgement > stops when the server repeats an unchanged warning confirmation [0.28ms]
+(pass) header month close warning acknowledgement > keeps the changedOrRunning close-gate outcome actionable instead of retrying [0.38ms]
+(pass) header month close warning acknowledgement > keeps the activeBlockers close-gate outcome actionable instead of retrying [0.06ms]
+(pass) header month close warning acknowledgement > keeps the alertSetChanged close-gate outcome actionable instead of retrying [0.06ms]
+(pass) header month close warning acknowledgement > closes warning-free months in one evaluation [0.04ms]
+(pass) header month close warning acknowledgement > does not offer acknowledgement without permission [0.04ms]
+
+tests/unit/api/alert-schemas.test.ts:
+(pass) alert dismissal input schema > requires positive months for month-based dismissals [1.48ms]
+(pass) alert dismissal input schema > rejects company-wide until-data-changes dismissals [0.14ms]
+(pass) alert public response schema > validates every persisted structured JSON field at runtime [1.84ms]
+(pass) alert public response schema > accepts canonical persisted CTA and revision values [0.14ms]
+(pass) alert public response schema > accepts persisted uploader identifiers that are not database schema IDs [0.55ms]
+(pass) alert public response schema > keeps status and effective severity as one discriminated state [0.31ms]
+
+tests/unit/api/alerts.test.ts:
+(pass) alert read APIs > returns shared structured alerts and aligned four-severity counts [56.41ms]
+(pass) alert read APIs > paginates millisecond-apart updates in the same second without gaps or duplicates [69.02ms]
+(pass) alert read APIs > uses alert ID as the stable cursor tie-breaker for equal timestamps [58.84ms]
+(pass) alert read APIs > rejects decoded cursors whose values do not match the cursor schema [48.06ms]
+(pass) alert read APIs > keeps aggregated counts aligned with effective warning, info, and hide visibility [84.42ms]
+(pass) alert dismissal details > returns the dismissal actor and time without exposing private user fields [60.93ms]
+(pass) alert read readiness > get returns only the requested ready alert [61.82ms]
+(pass) alert read readiness > get hides a requested alert when its readiness is not Ready [50.34ms]
+(pass) alert read readiness > treats missing check state as Running and hides unproven alerts [69.70ms]
+(pass) alert read readiness > omits stale alerts while exact revisions are Running and reveals them only when Ready [52.65ms]
+(pass) alert cleared visibility > omits automatically cleared alerts from every user-facing tab, count, and direct read [52.44ms]
+(pass) alert read authorization > enforces tenant, employee context, role exceptions, and alternate grants [80.52ms]
+(pass) alert direct-read authorization > does not infer tenant or employee scope from a target alert ID [43.52ms]
+(pass) alert mutations > allows note-only dismissal with read and dismiss permissions [65.06ms]
+(pass) alert mutations > enforces read, note, dismiss, and company-dismiss permissions independently [114.22ms]
+(pass) alert operation permissions > denies undo to a dismisser without changing the persisted decision [60.21ms]
+(pass) alert operation permissions > allows undo without granting dismissal permission [60.41ms]
+(pass) alert operation permissions > requires company undo permission for fresh and replayed company restoration [242.27ms]
+(pass) alert company mutation scope > rejects fresh and replayed company dismiss and undo from an employee context [159.25ms]
+(pass) alert mutation replay > idempotently dismisses, notes, and atomically undoes [508.31ms]
+(pass) alert mutation replay > authorizes dismiss replay using persisted reach after company permission revocation [335.24ms]
+(pass) alert mutation replay > returns the committed result to concurrent retries [629.82ms]
+(pass) alert mutation readiness > rejects mutations outside the currently edited payroll month [370.63ms]
+(pass) alert mutation readiness > rejects new mutations while exact-revision readiness is stale [258.22ms]
+(pass) alert read output validation > rejects malformed persisted structured fields at the router boundary [2341.80ms]
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+(pass) dismissal policy contract > requires a note and accepts dismissal without documents [273.39ms]
+(pass) dismissal policy contract > undoes only the selected overlap and preserves the other decision on retries [174.14ms]
+(pass) dismissal policy contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [182.42ms]
+(pass) dismissal policy contract > keeps lower-severity findings from being promoted by an older visibility override [1289.95ms]
+
+tests/unit/controllers/fileStorage.test.ts:
+(pass) Document Controller > createDocument > should create a document for an employee [68.82ms]
+(pass) Document Controller > createDocument > should auto-increment version for same name [77.55ms]
+(pass) Document Controller > createDocument > should reject access to employee in another company without deleting the supplied file [68.26ms]
+(pass) Document Controller > createDocument > should not delete the supplied file when router context validation fails [46.51ms]
+(pass) Document Controller > createDocument > should not delete the supplied file when permission validation fails [33.55ms]
+(pass) Document Controller > createDocument > should clean up the uploaded file when persistence fails after access checks [32.13ms]
+(pass) Document Controller > createDocument > should not clean up an unverified file key after a persistence failure [32.73ms]
+(pass) Document Controller > listDocuments > should return empty array when no documents exist [62.01ms]
+(pass) Document Controller > listDocuments > should return all versions ordered by createdAt desc [79.59ms]
+(pass) Document Controller > listDocuments > should not return soft-deleted documents [49.80ms]
+(pass) Document Controller > listDocuments > should reject listing for employee in another company [81.00ms]
+(pass) Document Controller > getDocumentWithAccess > should return document when caller has access [42.02ms]
+(pass) Document Controller > getDocumentWithAccess > should reject access to document in another company [64.00ms]
+(pass) Document Controller > getDocumentWithAccess > should throw NOT_FOUND for non-existent document [59.61ms]
+(pass) Document Controller > getDownloadUrl > should return signed URL for document [94.85ms]
+(pass) Document Controller > getDownloadUrl > should throw when file is not available [41.97ms]
+(pass) Document Controller > updateDocumentFields > should update name and notes [182.24ms]
+(pass) Document Controller > updateDocumentFields > should clear notes with null [55.34ms]
+(pass) Document Controller > updateDocumentFields > should throw NOT_FOUND for deleted document [41.84ms]
+(pass) Document Controller > updateDocumentFields > rejects updates to dismissal-attached evidence with Forbidden [158.15ms]
+(pass) Document Controller > softDeleteDocument > should soft delete a document [34.55ms]
+(pass) Document Controller > softDeleteDocument > should throw NOT_FOUND for non-existent document [28.50ms]
+(pass) Document Controller > destructive document operations > rejects dismissal-attached evidence during soft deletion [83.55ms]
+(pass) Document Controller > destructive document operations > rejects dismissal-attached evidence during hard deletion [104.32ms]
+(pass) Document Controller > destructive document operations > marks document-backed alerts as source_removed after soft deletion [115.51ms]
+(pass) Document Controller > destructive document operations > marks document-backed alerts as source_removed after hard deletion [83.95ms]
+(pass) Document Controller > destructive document operations > requires matching company scope for soft deletion [72.20ms]
+(pass) Document Controller > destructive document operations > requires matching company scope for hard deletion [100.24ms]
+(pass) Document Controller > listDocumentVersions > should return all versions ordered by version desc [60.94ms]
+(pass) Document Controller > listDocumentVersions > should not include soft-deleted versions [84.07ms]
+(pass) Document Controller > entity access scoping > should reject employee access when company scope is absent [32.32ms]
+(pass) Document Controller > entity access scoping > should reject company access when company scope is absent [46.72ms]
+(pass) Document Controller > entity access scoping > should reject department access when department scope is absent [48.37ms]
+(pass) Document Controller > entity access scoping > should allow global general access without company or department scope [40.05ms]
+(pass) Document Controller > entity access scoping > should allow company documents for own company [60.10ms]
+(pass) Document Controller > entity access scoping > should reject company documents for other company [61.66ms]
+(pass) Document Controller > entity access scoping > should allow general documents with entityId 'global' [38.89ms]
+(pass) Document Controller > entity access scoping > should reject general documents with arbitrary entityId [39.88ms]
+
+tests/integration/components/unified-payroll-findings.test.tsx:
+(pass) shared payroll findings > filters all four severities without changing status totals or the payroll route [1004.46ms]
+(pass) shared payroll findings > combines dismissed status with severity and preserves decision provenance [414.77ms]
+(pass) shared payroll findings > persists reason-only dismissal and undo through the real APIs [506.59ms]
+(pass) shared payroll findings > loads further findings without losing the selected scope or duplicating rows [230.44ms]
+(pass) shared payroll findings > withholds published rows and totals while checks are Running [81.30ms]
+(pass) shared payroll findings > renders an empty state without hiding either filter group [73.89ms]
+
+tests/integration/hooks/usePayrollAlerts.test.tsx:
+(pass) usePayrollAlerts real API integration > refreshes list/counts after note-only dismissal and selected undo [458.64ms]
+(pass) usePayrollAlerts real API integration > suppresses items and counts while exact-revision readiness is Running [131.93ms]
+
+tests/unit/services/alert-checks/close-gate.test.ts:
+(pass) close gate policy > alert policy and fencing > compares revision tuples without delimiter collisions [4.47ms]
+(pass) close gate policy > alert policy and fencing > critical remains an active close blocker [44.99ms]
+(pass) close gate policy > alert policy and fencing > error remains an active close blocker [119.12ms]
+(pass) close gate policy > alert policy and fencing > a dismissal for another alert type does not suppress a blocker [82.06ms]
+92 |         startMonth: MONTH,
+93 |         reason: "Blocker changed after review",
+94 |         actorId: fixture.actorId,
+95 |       });
+96 | 
+97 |       await expect(fixture.close()).rejects.toBeInstanceOf(AlertSetChangedCloseGateRejection);
+                                                 ^
+error: expect(received).toBeInstanceOf(expected)
+
+Expected constructor: [class AlertSetChangedCloseGateRejection extends CloseGateRejection]
+Received value: 243 |   if (
+244 |     snapshot.alerts.some(
+245 |       (alert) => alert.effectiveSeverity === "critical" || alert.effectiveSeverity === "error"
+246 |     )
+247 |   ) {
+248 |     throw new ActiveBlockersCloseGateRejection(snapshot);
+                ^
+ActiveBlockersCloseGateRejection: AlertsPage.errors.close.activeBlockers
+ rejectionCode: "activeBlockers",
+   snapshot: {
+  generation: 1,
+  revisions: [
+    [Object ...], [Object ...]
+  ],
+  alerts: [
+    [Object ...]
+  ],
+  warningAlertIds: [],
+  warningAcknowledged: false,
+},
+ templateValues: {
+  blockerCount: 1,
+},
+       code: "CONFLICT"
+
+      at enforceCloseGate (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/close-gate.ts:248:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/services/alert-checks/close-gate.test.ts:97:45)
+
+37 |     } as const;
+38 |     super({
+39 |       ...defaults,
+40 |       ...opts,
+41 |       message: opts.messageKey,
+42 |       cause: new _MessageCause({ ...defaults, ...opts }),
+                  ^
+error: AlertsPage.errors.close.activeBlockers
+  ctaUrl: undefined,
+ details: undefined,
+   field: undefined,
+   cause: undefined,
+
+      at new ServerError (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:42:14)
+      at new CloseGateRejection (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/close-gate.ts:85:5)
+      at new ActiveBlockersCloseGateRejection (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/close-gate.ts:108:5)
+      at enforceCloseGate (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/close-gate.ts:248:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/services/alert-checks/close-gate.test.ts:97:45)
+
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/services/alert-checks/close-gate.test.ts:97:45)
+(fail) close gate policy > alert policy and fencing > a blocker hidden after review rejects the stale close [93.42ms]
+(pass) close gate policy > alert policy and fencing > close rejections preserve typed transport codes and message keys [110.92ms]
+(pass) close gate policy > alert policy and fencing > info-only state closes without acknowledgement [74.50ms]
+(pass) close gate policy > alert policy and fencing > warnings require collective acknowledgement [38.06ms]
+(pass) close gate policy > alert policy and fencing > warning acknowledgement requires permission [38.43ms]
+(pass) close gate policy > alert policy and fencing > authorized acknowledgement records the exact warning set [42.79ms]
+(pass) close gate policy > alert policy and fencing > running readiness wins before alert policy [65.15ms]
+(pass) close gate policy > alert policy and fencing > changed generations reject the reviewed snapshot [101.87ms]
+(pass) close gate policy > alert policy and fencing > changed revisions reject the reviewed snapshot [69.31ms]
+(pass) close gate policy > alert policy and fencing > changed warning set rejects acknowledgement [78.85ms]
+(pass) close gate policy > alert policy and fencing > success snapshots are immutable [49.85ms]
+(pass) close gate policy > stored snapshot replay > successful close retries return the immutable stored snapshot [52.39ms]
+(pass) close gate policy > close alert-check isolation > new close and replay create no alert-check queue data [44.49ms]
+(pass) close gate policy > close alert-check isolation > resolver failure cannot roll back month advancement or its snapshot [28.09ms]
+(pass) close gate policy > close lifecycle > a bodyless legacy close derives its fence transactionally and replays safely [23.27ms]
+(pass) close gate policy > close lifecycle > a reopened month records a new close instead of replaying the prior close [23.73ms]
+(pass) close gate policy > close lifecycle > replays a matching historical snapshot after a newer re-close [24.97ms]
+(pass) close gate policy > readiness > a newer queued generation keeps close running despite older successful results [14.41ms]
+
+tests/unit/services/alert-checks/dismissal.test.ts:
+(pass) alert dismissal decisions > keeps localized dismissal duration rules in the domain service [2.32ms]
+(pass) alert dismissal decisions > accepts a route-authorized context without controller permission metadata [47.86ms]
+(pass) alert dismissal decisions > fingerprints suggestion values deterministically [1.61ms]
+(pass) alert dismissal decisions > preserves optional evidence and invalidates an until-data-changes decision when values change [49.05ms]
+(pass) alert dismissal decisions > monthly causes matching respects changed values and the selected expiry [81.75ms]
+(pass) alert dismissal decisions > monthly alert_type matching respects changed values and the selected expiry [86.22ms]
+(pass) alert dismissal decisions > undoes the selected decision without removing the overlapping decision [66.84ms]
+(pass) alert dismissal decisions > returns only decisions for the alert employee and causes ordered by createdAt then id [150.43ms]
+(pass) alert dismissal decisions > undoes a decision that covers an alert in a later payroll month [89.33ms]
+(pass) alert dismissal decisions > applies company month decisions to matching employee alerts and rejects data-change reach [93.82ms]
+(pass) alert dismissal decisions > never applies a dismissal to a different alert type [36.62ms]
+(pass) alert dismissal decisions > covers the recorded severity and lower levels but never escalation [45.99ms]
+(pass) alert dismissal decisions > scopes employee dismissals and reads to the selected employee [37.75ms]
+(pass) alert dismissal decisions > rejects cross-company access and an attached document from another employee [41.22ms]
+
+1 tests failed:
+(fail) close gate policy > alert policy and fencing > a blocker hidden after review rejects the stale close [93.42ms]
+
+ 135 pass
+ 1 fail
+ 451 expect() calls
+Ran 136 tests across 10 files. [42.87s]

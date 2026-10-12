@@ -1,0 +1,161 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-actions.test.tsx:
+ 9 |   alert: PayrollAlert;
+10 |   payslipHref: AppUrl | null;
+11 | }
+12 | 
+13 | export function PayrollFindingCard(_props: PayrollFindingCardProps): ReactNode {
+14 |   throw new Error("Payroll finding card contract pending");
+                 ^
+error: Payroll finding card contract pending
+      at PayrollFindingCard (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-finding-card.tsx:14:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performSyncWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18972:7)
+(fail) payroll finding actions > renders typed titles, interpolated messages and Review in en [116.80ms]
+ 9 |   alert: PayrollAlert;
+10 |   payslipHref: AppUrl | null;
+11 | }
+12 | 
+13 | export function PayrollFindingCard(_props: PayrollFindingCardProps): ReactNode {
+14 |   throw new Error("Payroll finding card contract pending");
+                 ^
+error: Payroll finding card contract pending
+      at PayrollFindingCard (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-finding-card.tsx:14:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performSyncWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18972:7)
+(fail) payroll finding actions > renders typed titles, interpolated messages and Review in he [70.06ms]
+ 9 |   alert: PayrollAlert;
+10 |   payslipHref: AppUrl | null;
+11 | }
+12 | 
+13 | export function PayrollFindingCard(_props: PayrollFindingCardProps): ReactNode {
+14 |   throw new Error("Payroll finding card contract pending");
+                 ^
+error: Payroll finding card contract pending
+      at PayrollFindingCard (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-finding-card.tsx:14:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performSyncWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18972:7)
+(fail) payroll finding actions > offers Review, translated secondary CTAs and notes without dismissal [65.80ms]
+ 9 |   alert: PayrollAlert;
+10 |   payslipHref: AppUrl | null;
+11 | }
+12 | 
+13 | export function PayrollFindingCard(_props: PayrollFindingCardProps): ReactNode {
+14 |   throw new Error("Payroll finding card contract pending");
+                 ^
+error: Payroll finding card contract pending
+      at PayrollFindingCard (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-finding-card.tsx:14:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performSyncWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18972:7)
+(fail) payroll finding actions > clears a draft without saving and shows submitted notes after remount [56.92ms]
+
+tests/integration/components/unified-payroll-findings.test.tsx:
+ 5 | export interface PayrollFindingsListProps {
+ 6 |   className?: string;
+ 7 | }
+ 8 | 
+ 9 | export function PayrollFindingsList(_props: PayrollFindingsListProps): ReactNode {
+10 |   throw new Error("Payroll findings list contract pending");
+                 ^
+error: Payroll findings list contract pending
+      at PayrollFindingsList (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-findings-list.tsx:10:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performWorkOnRootViaSchedulerTask (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18957:7)
+(fail) shared payroll findings > filters all four severities without changing totals or the payroll route [72.76ms]
+ 5 | export interface PayrollFindingsListProps {
+ 6 |   className?: string;
+ 7 | }
+ 8 | 
+ 9 | export function PayrollFindingsList(_props: PayrollFindingsListProps): ReactNode {
+10 |   throw new Error("Payroll findings list contract pending");
+                 ^
+error: Payroll findings list contract pending
+      at PayrollFindingsList (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-findings-list.tsx:10:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performWorkOnRootViaSchedulerTask (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18957:7)
+(fail) shared payroll findings > starts expanded with findings and preserves filters across collapse [42.54ms]
+ 5 | export interface PayrollFindingsListProps {
+ 6 |   className?: string;
+ 7 | }
+ 8 | 
+ 9 | export function PayrollFindingsList(_props: PayrollFindingsListProps): ReactNode {
+10 |   throw new Error("Payroll findings list contract pending");
+                 ^
+error: Payroll findings list contract pending
+      at PayrollFindingsList (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-findings-list.tsx:10:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performWorkOnRootViaSchedulerTask (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18957:7)
+(fail) shared payroll findings > withholds published rows and totals while checks are Running [60.20ms]
+ 5 | export interface PayrollFindingsListProps {
+ 6 |   className?: string;
+ 7 | }
+ 8 | 
+ 9 | export function PayrollFindingsList(_props: PayrollFindingsListProps): ReactNode {
+10 |   throw new Error("Payroll findings list contract pending");
+                 ^
+error: Payroll findings list contract pending
+      at PayrollFindingsList (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/src/components/payroll-findings/payroll-findings-list.tsx:10:13)
+      at react_stack_bottom_frame (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)
+      at renderWithHooks (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)
+      at updateFunctionComponent (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)
+      at runWithFiberInDEV (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+      at performUnitOfWork (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)
+      at workLoopSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)
+      at renderRootSync (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:17450:11)
+      at performWorkOnRoot (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:16583:35)
+      at performWorkOnRootViaSchedulerTask (/Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/node_modules/react-dom/cjs/react-dom-client.development.js:18957:7)
+(fail) shared payroll findings > starts collapsed without findings and reveals empty filters on request [33.80ms]
+
+ 0 pass
+ 8 fail
+Ran 8 tests across 2 files. [1.83s]

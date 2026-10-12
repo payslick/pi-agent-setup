@@ -1,0 +1,34 @@
+{
+  "mainSessionId": "01a10303-5fbf-71ed-b1b1-1c46670c8d35",
+  "taskId": "rebase-1055-findings-ui",
+  "status": "implemented-browser-validation-blocked",
+  "baseCommit": "8250881d66efbe02b2e5da154f93f25b8af6f08e",
+  "rebasedHead": "b4da97907",
+  "originalTip": "81146551ba37ffd4ebd34a4b4dca06899b220b0e",
+  "backupBranch": "backup/alerts-basic-frontend-before-1055",
+  "backupTag": "backup-alerts-frontend-before-1055",
+  "implementation": "main agent; Herdr spawn failed before creating worker due ELOOP in external attempts directory; no live worker session/tab/pane existed",
+  "contractAdjustment": "Main adjusted Running UI fixture to use a historical viewed month with future-due queued work, avoiding the active-month list reconciliation wait; observable UI contract unchanged.",
+  "validation": {
+    "focusedTests": "62 pass, 0 fail: final-tests.log",
+    "typecheck": "post-edit automatic check returned no failure",
+    "formatAndLint": "project format completed, zero lint warnings/errors",
+    "diffCheck": "passed",
+    "e2e": "blocked before test execution: no registered workspace dev server; e2e-validation.log"
+  },
+  "remaining": [
+    "Run the three changed E2E suites after user starts managed workspace server",
+    "Adaptation changes remain uncommitted; no push performed"
+  ],
+  "workerAttempts": [
+    {
+      "taskId": "rebase-1055-findings-ui",
+      "status": "spawn-error",
+      "error": "ELOOP",
+      "workerSessionId": null,
+      "workspaceId": null,
+      "tabId": null,
+      "paneId": null
+    }
+  ]
+}

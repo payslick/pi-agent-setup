@@ -1,0 +1,19 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-actions.test.tsx:
+(pass) payroll finding actions > renders typed titles, interpolated messages and Review in en [163.82ms]
+(pass) payroll finding actions > renders typed titles, interpolated messages and Review in he [77.99ms]
+(pass) payroll finding actions > offers Review, translated secondary CTAs and notes without dismissal [67.26ms]
+(pass) payroll finding actions > clears a draft without saving and shows submitted notes after remount [99.45ms]
+
+tests/integration/components/unified-payroll-findings.test.tsx:
+(pass) shared payroll findings > filters all four severities without changing totals or the payroll route [145.74ms]
+(pass) shared payroll findings > starts expanded with findings and preserves filters across collapse [103.75ms]
+(fail) shared payroll findings > withholds published rows and totals while checks are Running [5011.17ms]
+  ^ this test timed out after 5000ms.
+(pass) shared payroll findings > starts collapsed without findings and reveals empty filters on request [74.36ms]
+
+ 7 pass
+ 1 fail
+ 58 expect() calls
+Ran 8 tests across 2 files. [7.02s]

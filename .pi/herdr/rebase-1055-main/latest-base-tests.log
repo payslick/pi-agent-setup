@@ -1,0 +1,84 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-actions.test.tsx:
+(pass) payroll finding actions > renders typed titles, interpolated messages and Review in en [185.80ms]
+(pass) payroll finding actions > renders typed titles, interpolated messages and Review in he [76.10ms]
+(pass) payroll finding actions > offers Review, translated secondary CTAs and notes without dismissal [69.78ms]
+(pass) payroll finding actions > clears a draft without saving and shows submitted notes after remount [149.57ms]
+
+tests/unit/ui/payslip-status-panel.test.tsx:
+(pass) PayslipStatusPanel > leads with how many payslips are ready and the completion percentage [12.62ms]
+(pass) PayslipStatusPanel > renders a pill per non-empty work state and omits empty ones [6.41ms]
+(pass) PayslipStatusPanel > surfaces saved-but-flagged employees in the work tier and out of ready [5.53ms]
+(pass) PayslipStatusPanel > leads the review tier with the unreviewed deviation count [5.06ms]
+(pass) PayslipStatusPanel > switches to an all-clear line when nothing is left to review [4.87ms]
+(pass) PayslipStatusPanel > links the review tier to the payroll controls page under the active locale [9.74ms]
+(pass) PayslipStatusPanel > makes the controls link the only action while payslips are still not payable [6.18ms]
+(pass) PayslipStatusPanel > promotes approving the month once every payslip is ready, keeping the controls link [7.36ms]
+(pass) PayslipStatusPanel > disables approval for active critical alerts and explains why on hover [18.55ms]
+(pass) PayslipStatusPanel > disables approval for active error alerts and explains why on hover [17.09ms]
+(pass) PayslipStatusPanel > keeps approval enabled without blocking alerts ({"critical":0,"error":0,"warning":0,"info":0}) [7.27ms]
+(pass) PayslipStatusPanel > keeps approval enabled without blocking alerts ({"critical":0,"error":0,"warning":2,"info":3}) [7.02ms]
+(pass) PayslipStatusPanel > falls back to the empty message when no payslip work exists [3.95ms]
+
+tests/unit/hooks/useAlertMessage.test.tsx:
+(pass) useAlertMessage > resolves typed title and message names using the finding data [3.56ms]
+
+tests/unit/lib/payroll-findings.test.ts:
+(pass) payroll alert view model > filters severities without clipping total counts and orders blockers first [0.43ms]
+(pass) payroll alert view model > ranks employees by critical plus error, then warning, info, and employee ID [0.15ms]
+(pass) payroll alert view model > uses the employee ID as the stable final tie-breaker [0.03ms]
+(pass) payroll alert view model > interpolates API message values without losing zero, false, or null [0.03ms]
+
+tests/unit/api/alerts.test.ts:
+(pass) returns persisted notes only for their finding and authorized scope [115.94ms]
+(pass) listing payroll alerts > returns current findings with employee details and omits resolved findings [61.84ms]
+(pass) listing payroll alerts > lists only the selected company, employee and month [94.67ms]
+(pass) alert readiness > returns committed empty results after a draft mutation clears an old finding [102.11ms]
+(pass) alert readiness > awaits stalled pending work and returns the latest committed payload [1094.11ms]
+(pass) alert readiness > reads historical results without reevaluating or enqueueing work [63.41ms]
+(pass) alert tenant isolation > rejects another company's scope and alert IDs [62.67ms]
+(pass) alert tenant isolation > returns no alerts and rejects mutations without a selected scope [43.48ms]
+(pass) reviewing payroll alerts > records a note once and preserves its original text when retried [58.07ms]
+(pass) reviewing payroll alerts > rejects reusing a note key for another alert without annotating it [61.38ms]
+(pass) reviewing payroll alerts > rejects annotating another employee in an employee-selected scope [61.40ms]
+(pass) alert review permissions > lets a reader view findings but not annotate them [74.02ms]
+(pass) alert read authorization > denies the alert-only reader access to findings and readiness [76.24ms]
+(pass) alert read authorization > denies the employee-only reader access to findings and readiness [55.08ms]
+(pass) alert read authorization > allows a reader with both permissions without exposing review state [49.77ms]
+(pass) alert read authorization > returns no findings or readiness when no company or department is selected [54.26ms]
+(pass) alert read authorization > lists authorized department companies without including another department [93.56ms]
+(pass) alert read authorization > rejects a forged employee and company pairing [68.36ms]
+
+tests/integration/components/unified-payroll-findings.test.tsx:
+(pass) shared payroll findings > filters all four severities without changing totals or the payroll route [178.95ms]
+(pass) shared payroll findings > starts expanded with findings and preserves filters across collapse [118.21ms]
+(pass) shared payroll findings > withholds published rows and totals while checks are Running [72.44ms]
+(pass) shared payroll findings > starts collapsed without findings and reveals empty filters on request [90.19ms]
+
+tests/integration/hooks/usePayrollDashboardData.test.tsx:
+(pass) usePayrollDashboardData > shows the empty state after both payroll months load and links to attendance import [97.94ms]
+(pass) usePayrollDashboardData > blocks approval only for blocking severity (critical) [109.64ms]
+(pass) usePayrollDashboardData > blocks approval only for blocking severity (error) [126.55ms]
+(pass) usePayrollDashboardData > blocks approval only for blocking severity (warning) [153.86ms]
+(pass) usePayrollDashboardData > blocks approval only for blocking severity (info) [111.35ms]
+(pass) usePayrollDashboardData > shows current alert counts only for the viewed company and month beside payroll controls [188.85ms]
+(pass) usePayrollDashboardData > returns current-month KPIs and month-over-month change from separately scoped payslips [80.06ms]
+(pass) usePayrollDashboardData > reads the employer bituach leumi column rather than the employee deduction [88.95ms]
+(pass) usePayrollDashboardData > counts a saved payslip as ready and reports attendance with its month-over-month change [80.23ms]
+(pass) usePayrollDashboardData > attributes each hire to the month its employment started [82.59ms]
+(pass) usePayrollDashboardData > leaves an unreviewed deviation open and clears it once marked checked [146.75ms]
+(pass) usePayrollDashboardData > wires employer-cost KPI and raise/termination counters from scoped queries [85.22ms]
+
+tests/integration/hooks/usePayrollAlerts.test.tsx:
+(pass) usePayrollAlerts real API integration > marks the initial list Running and exposes employee readiness after loading [90.45ms]
+(pass) usePayrollAlerts real API integration > keeps ready companies usable while another company's employee checks are Running [113.34ms]
+(pass) usePayrollAlerts real API integration > reports a denied list without marking it Running and recovers after retry [114.35ms]
+(pass) usePayrollAlerts real API integration > filters the complete list locally without clipping or changing total counts [469.17ms]
+(pass) usePayrollAlerts real API integration > isolates the same-month list when company and employee context changes [235.07ms]
+(pass) usePayrollAlerts real API integration > suppresses items and counts while employee generation readiness is Running [100.11ms]
+
+ 62 pass
+ 0 fail
+ 232 expect() calls
+Ran 62 tests across 8 files. [7.29s]

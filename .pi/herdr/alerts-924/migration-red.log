@@ -1,0 +1,22 @@
+bun test v1.4.2 (744846f84)
+
+tests/unit/db/alert-evidence-migration.test.ts:
+32 |     const second = await legacyEvidence(secondCompany.id);
+33 |     await migrateEvidence();
+34 |     for(const {file,link} of [first,second]) {
+35 |       expect(await testDb.db.query.storedFiles.findFirst({where:eq(storedFiles.id,file.id)})).toEqual(file);
+36 |       expect(await testDb.db.query.alertDismissalAttachedDocuments.findFirst({where:eq(alertDismissalAttachedDocuments.id,link.id)})).toEqual(link);
+37 |       await expect(testDb.db.update(storedFiles).set({name:"changed"}).where(eq(storedFiles.id,file.id)).execute()).rejects.toThrow("immutable");
+                                                                                                                                 ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "immutable"
+Received message: "Failed query: update \"sigma_stored_file\" set \"name\" = ? where \"sigma_stored_file\".\"id\" = ?\nparams: changed,stored-file-81bb9255-21fa-47cb-a206-214e1e49147f"
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/db/alert-evidence-migration.test.ts:37:125)
+(fail) alert evidence migration > preserves legacy duplicate-key files and immutable evidence references across companies [66.36ms]
+
+ 0 pass
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [928.00ms]

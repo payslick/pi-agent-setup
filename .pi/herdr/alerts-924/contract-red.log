@@ -1,0 +1,244 @@
+bun test v1.4.2 (744846f84)
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+61 | 		if (!result.ok) return result;
+62 | 		try {
+63 | 			const data = await parse(result.data);
+64 | 			return (0, import_objectSpread2$2.default)((0, import_objectSpread2$2.default)({}, result), {}, { data });
+65 | 		} catch (cause) {
+66 | 			throw new TRPCError({
+              ^
+TRPCError: Output validation failed
+  code: "INTERNAL_SERVER_ERROR"
+
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:66:10)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+
+58 | function createOutputMiddleware(parse) {
+59 | 	const outputMiddleware = async function outputValidatorMiddleware({ next }) {
+60 | 		const result = await next();
+61 | 		if (!result.ok) return result;
+62 | 		try {
+63 | 			const data = await parse(result.data);
+                           ^
+ZodError: [
+  {
+    "expected": "object",
+    "code": "invalid_type",
+    "path": [
+      "item",
+      "permissions"
+    ],
+    "message": "Invalid input: expected object, received undefined"
+  }
+]
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:63:23)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+(fail) evidence-backed dismissal contract > requires a reason and document without changing the finding [80.83ms]
+428 |     ({ entityType, entityId }) =>
+429 |       (entityType === "company" && entityId === companyId) ||
+430 |       (reach === "employee" && entityType === "employee" && entityId === employeeId)
+431 |   );
+432 |   if (!ownsAll) {
+433 |     throw new NotFound({
+                ^
+TRPCError: AlertsPage.errors.attachedDocumentNotFound
+  code: "NOT_FOUND"
+
+      at assertAttachedDocumentOwnership (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:433:11)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:87:15)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:287:28)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:40:20)
+      at async transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:71:28)
+      at async withTransaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:37:27)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:301:20)
+      at async withSqliteBusyRetry (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:489:20)
+
+37 |     } as const;
+38 |     super({
+39 |       ...defaults,
+40 |       ...opts,
+41 |       message: opts.messageKey,
+42 |       cause: new _MessageCause({ ...defaults, ...opts }),
+                  ^
+error: AlertsPage.errors.attachedDocumentNotFound
+  ctaUrl: undefined,
+ details: undefined,
+   field: undefined,
+   cause: undefined,
+
+      at new ServerError (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:42:14)
+      at new NotFound (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:72:5)
+      at assertAttachedDocumentOwnership (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:433:11)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:87:15)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:287:28)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:40:20)
+      at async transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:71:28)
+      at async withTransaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:37:27)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:301:20)
+      at async withSqliteBusyRetry (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:489:20)
+(fail) evidence-backed dismissal contract > persists documents and policy once and keeps evidence immutable after undo [49.15ms]
+111 |     };
+112 |     const first = await testDb.builder.alertDismissal({ ...scope, reason: "First" });
+113 |     const second = await testDb.builder.alertDismissal({ ...scope, reason: "Second" });
+114 |     const undo = { alertId: alert.id, dismissalId: first.id, idempotencyKey: "undo-one-overlap" };
+115 |     const result = await caller.alerts.undo(undo);
+116 |     expect(result.dismissalIds).toEqual([first.id]);
+                                      ^
+error: expect(received).toEqual(expected)
+
+  [
+    "alert_dismissal-4bc75c24-8ac7-47da-9669-c168631d1014",
++   "alert_dismissal-4f79ffcd-933f-4d0a-a2a9-22962bf386fa",
+  ]
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/api/alert-dismissal-contract.test.ts:116:33)
+(fail) evidence-backed dismissal contract > undoes only the selected overlap and preserves the other decision on retries [50.58ms]
+129 |       month,
+130 |       alertType: alert.alertType,
+131 |       severity: "critical",
+132 |       actorId: testDb.user.id,
+133 |     });
+134 |     await expect(caller.alerts.dismiss(input)).rejects.toMatchObject({
+                                                             ^
+error: expect(received).toMatchObject(expected)
+
+- {
+-   "code": "BAD_REQUEST",
+-   "message": "AlertsPage.errors.criticalDismissalForbidden",
+- }
++ [NotFound: AlertsPage.errors.attachedDocumentNotFound]
+
+- Expected  - 4
++ Received  + 1
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/api/alert-dismissal-contract.test.ts:134:56)
+(fail) evidence-backed dismissal contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [44.86ms]
+162 |       }),
+163 |     ];
+164 |     for (const file of files) {
+165 |       await expect(
+166 |         caller.alerts.dismiss({ ...input, attachedDocumentFileIds: [file.id] })
+167 |       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+                      ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/api/alert-dismissal-contract.test.ts:167:17)
+(fail) evidence-backed dismissal contract > rejects another uploader or alert's staged evidence [44.47ms]
+53 |   general: PERMISSIONS.company.document.delete,
+54 | };
+55 | 
+56 | function assertPermission(permissions: Permission[], required: Permission) {
+57 |   if (!permissions.includes(required)) {
+58 |     throw new Forbidden({
+               ^
+TRPCError: Common.errors.insufficientPermissions
+  code: "FORBIDDEN"
+
+      at assertPermission (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/api/routers/fileStorage.ts:58:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/api/routers/fileStorage.ts:69:7)
+      at resolveMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:221:23)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+
+37 |     } as const;
+38 |     super({
+39 |       ...defaults,
+40 |       ...opts,
+41 |       message: opts.messageKey,
+42 |       cause: new _MessageCause({ ...defaults, ...opts }),
+                  ^
+error: Common.errors.insufficientPermissions
+  ctaUrl: undefined,
+ details: undefined,
+   field: undefined,
+   cause: undefined,
+
+      at new ServerError (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:42:14)
+      at new Forbidden (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:78:5)
+      at assertPermission (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/api/routers/fileStorage.ts:58:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/api/routers/fileStorage.ts:69:7)
+      at resolveMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:221:23)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+(fail) evidence-backed dismissal contract > registers a signed upload idempotently and rejects unsigned or cross-alert reuse [38.34ms]
+61 | 		if (!result.ok) return result;
+62 | 		try {
+63 | 			const data = await parse(result.data);
+64 | 			return (0, import_objectSpread2$2.default)((0, import_objectSpread2$2.default)({}, result), {}, { data });
+65 | 		} catch (cause) {
+66 | 			throw new TRPCError({
+              ^
+TRPCError: Output validation failed
+  code: "INTERNAL_SERVER_ERROR"
+
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:66:10)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+
+58 | function createOutputMiddleware(parse) {
+59 | 	const outputMiddleware = async function outputValidatorMiddleware({ next }) {
+60 | 		const result = await next();
+61 | 		if (!result.ok) return result;
+62 | 		try {
+63 | 			const data = await parse(result.data);
+                           ^
+ZodError: [
+  {
+    "expected": "array",
+    "code": "invalid_type",
+    "path": [
+      "item",
+      "dismissals",
+      0,
+      "documents"
+    ],
+    "message": "Invalid input: expected array, received undefined"
+  },
+  {
+    "expected": "boolean",
+    "code": "invalid_type",
+    "path": [
+      "item",
+      "dismissals",
+      0,
+      "canUndo"
+    ],
+    "message": "Invalid input: expected boolean, received undefined"
+  },
+  {
+    "expected": "boolean",
+    "code": "invalid_type",
+    "path": [
+      "item",
+      "dismissals",
+      0,
+      "isEffective"
+    ],
+    "message": "Invalid input: expected boolean, received undefined"
+  },
+  {
+    "expected": "object",
+    "code": "invalid_type",
+    "path": [
+      "item",
+      "permissions"
+    ],
+    "message": "Invalid input: expected object, received undefined"
+  }
+]
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:63:23)
+      at async callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+(fail) evidence-backed dismissal contract > keeps lower-severity findings from being promoted by an older visibility override [50.52ms]
+
+ 0 pass
+ 7 fail
+ 6 expect() calls
+Ran 7 tests across 1 file. [1289.00ms]

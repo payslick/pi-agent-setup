@@ -1,0 +1,87 @@
+bun test v1.4.2 (744846f84)
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+(pass) evidence-backed dismissal contract > requires a reason and document without changing the finding [128.28ms]
+38 |   async queryWithCache(queryString, params, query) {
+39 |     if (this.cache === void 0 || is(this.cache, NoopCache) || this.queryMetadata === void 0) {
+40 |       try {
+41 |         return await query();
+42 |       } catch (e) {
+43 |         throw new DrizzleQueryError(queryString, params, e);
+                       ^
+TRPCError: Failed query: insert into "sigma_alert_dismissal_attached_document" ("dismissal_id", "file_id", "company_id", "id", "createdAt", "isDeleted") values (?, ?, ?, ?, (unixepoch()), ?)
+params: alert_dismissal-c8ed5f34-98ea-49b6-b087-2014ce7ea0f2,stored-file-824b0c60-3b72-4ef9-9cf8-ddcd43b96441,company-5bb94a01-a6e9-41e8-bea2-3eb2f6a784b6,alert_dismissal_attached_document-f01ac730-e139-441c-96d1-36284c7529e4,0
+  code: "INTERNAL_SERVER_ERROR"
+
+      at queryWithCache (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/session.js:43:19)
+      at run (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:121:23)
+
+38 |   async queryWithCache(queryString, params, query) {
+39 |     if (this.cache === void 0 || is(this.cache, NoopCache) || this.queryMetadata === void 0) {
+40 |       try {
+41 |         return await query();
+42 |       } catch (e) {
+43 |         throw new DrizzleQueryError(queryString, params, e);
+                       ^
+error: Failed query: insert into "sigma_alert_dismissal_attached_document" ("dismissal_id", "file_id", "company_id", "id", "createdAt", "isDeleted") values (?, ?, ?, ?, (unixepoch()), ?)
+params: alert_dismissal-c8ed5f34-98ea-49b6-b087-2014ce7ea0f2,stored-file-824b0c60-3b72-4ef9-9cf8-ddcd43b96441,company-5bb94a01-a6e9-41e8-bea2-3eb2f6a784b6,alert_dismissal_attached_document-f01ac730-e139-441c-96d1-36284c7529e4,0
+  query: "insert into \"sigma_alert_dismissal_attached_document\" (\"dismissal_id\", \"file_id\", \"company_id\", \"id\", \"createdAt\", \"isDeleted\") values (?, ?, ?, ?, (unixepoch()), ?)",
+ params: [
+  "alert_dismissal-c8ed5f34-98ea-49b6-b087-2014ce7ea0f2", "stored-file-824b0c60-3b72-4ef9-9cf8-ddcd43b96441",
+  "company-5bb94a01-a6e9-41e8-bea2-3eb2f6a784b6", "alert_dismissal_attached_document-f01ac730-e139-441c-96d1-36284c7529e4",
+  0
+],
+  cause: 367 |         throw mapSqliteError(e);
+368 |     }
+369 | }
+370 | function mapSqliteError(e) {
+371 |     if (e instanceof Database.SqliteError) {
+372 |         return new LibsqlError(e.message, e.code, e.rawCode, e);
+                     ^
+LibsqlError: SQLITE_CONSTRAINT_TRIGGER: dismissal attached document ownership is invalid
+ rawCode: 1811,
+    code: "SQLITE_CONSTRAINT_TRIGGER"
+
+      at mapSqliteError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:372:16)
+      at executeStmt (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:277:15)
+      at execute (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:188:16)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:123:32)
+      at queryWithCache (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/session.js:41:22)
+      at run (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:121:23)
+      at execute (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/query-builders/insert.js:174:54)
+      at then (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/query-promise.js:21:17)
+,
+
+      at queryWithCache (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/session.js:43:19)
+      at run (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:121:23)
+
+367 |         throw mapSqliteError(e);
+368 |     }
+369 | }
+370 | function mapSqliteError(e) {
+371 |     if (e instanceof Database.SqliteError) {
+372 |         return new LibsqlError(e.message, e.code, e.rawCode, e);
+                     ^
+LibsqlError: SQLITE_CONSTRAINT_TRIGGER: dismissal attached document ownership is invalid
+ rawCode: 1811,
+    code: "SQLITE_CONSTRAINT_TRIGGER"
+
+      at mapSqliteError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:372:16)
+      at executeStmt (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:277:15)
+      at execute (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:188:16)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:123:32)
+      at queryWithCache (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/session.js:41:22)
+      at run (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:121:23)
+      at execute (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/sqlite-core/query-builders/insert.js:174:54)
+      at then (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/query-promise.js:21:17)
+(fail) evidence-backed dismissal contract > persists documents and policy once and keeps evidence immutable after undo [74.17ms]
+(pass) evidence-backed dismissal contract > undoes only the selected overlap and preserves the other decision on retries [89.38ms]
+(pass) evidence-backed dismissal contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [115.19ms]
+(pass) evidence-backed dismissal contract > rejects another uploader or alert's staged evidence [99.58ms]
+(pass) evidence-backed dismissal contract > registers a signed upload idempotently and rejects unsigned or cross-alert reuse [87.83ms]
+(pass) evidence-backed dismissal contract > keeps lower-severity findings from being promoted by an older visibility override [96.89ms]
+
+ 6 pass
+ 1 fail
+ 21 expect() calls
+Ran 7 tests across 1 file. [4.13s]

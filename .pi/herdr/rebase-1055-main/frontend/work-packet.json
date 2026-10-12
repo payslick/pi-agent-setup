@@ -1,0 +1,89 @@
+{
+  "taskId": "rebase-1055-findings-ui",
+  "objective": "Adapt existing findings UI to PR1055 AlertListItem plus notes, preserving layout/review/navigation and removing dismissal UI. Main has rebased branch and migrated shared hook/helpers/backend notes. Restore card/list presentation from git show HEAD:path (working tree currently has intentional typed contract stubs), adapting rather than redesigning.",
+  "writableFiles": [
+    "src/components/payroll-findings/payroll-finding-card.tsx",
+    "src/components/payroll-findings/payroll-findings-list.tsx",
+    "src/components/payroll-findings/payroll-finding-actions.tsx",
+    "src/components/payroll-findings/payroll-findings-filter-bar.tsx",
+    "src/components/payroll-findings/employee-payroll-findings.tsx",
+    "src/components/payroll-findings/payroll-finding-dismiss-dialog.tsx",
+    "src/components/payroll-findings/payroll-finding-notes.tsx"
+  ],
+  "contractFiles": [
+    "src/lib/payroll-findings.ts",
+    "src/hooks/usePayrollAlerts.ts",
+    "src/hooks/useAlertMessage.ts",
+    "src/server/api/schemas/alerts.ts",
+    "tests/integration/components/unified-payroll-findings.test.tsx",
+    "tests/integration/payroll-finding-actions.test.tsx",
+    ".pi/herdr/rebase-1055-main/frontend/contracts.md"
+  ],
+  "acceptanceCriteria": [
+    "All eight tests in the two frozen integration files pass; do not edit tests",
+    "No dismissal calls/props/dialog or dismissed tabs; delete obsolete dismiss dialog",
+    "Use alert.title/message with data, severity directly, cta field/route directly; no category/causes/suggestion/ctas",
+    "Preserve compact card, collapse/filter behavior and first CTA Review label; secondary labels translated from cta.label using alert.data",
+    "Field CTA createFieldLink uses cta.field and translated alert.message/data, retains handleReviewClick same URL reactivation",
+    "Preserve note editing, focus, validation, persistence and remount display",
+    "Call submit_checkpoint at meaningful milestones and submit_handoff before returning; include exact commands/results"
+  ],
+  "nonGoals": [
+    "No edits outside ownership",
+    "No changes to schemas, backend, hooks or shared helpers",
+    "No test edits or unrelated styling cleanup",
+    "No git commits or git staging"
+  ],
+  "validationPhase": "green",
+  "expectedFailingTests": [
+    {
+      "path": "tests/integration/payroll-finding-actions.test.tsx",
+      "title": "renders typed titles, interpolated messages and Review in en",
+      "expectedReason": "Typed card stub awaits implementation",
+      "outputPattern": "Payroll finding card contract pending"
+    },
+    {
+      "path": "tests/integration/payroll-finding-actions.test.tsx",
+      "title": "renders typed titles, interpolated messages and Review in he",
+      "expectedReason": "Typed card stub awaits implementation",
+      "outputPattern": "Payroll finding card contract pending"
+    },
+    {
+      "path": "tests/integration/payroll-finding-actions.test.tsx",
+      "title": "offers Review, translated secondary CTAs and notes without dismissal",
+      "expectedReason": "Typed card stub awaits implementation",
+      "outputPattern": "Payroll finding card contract pending"
+    },
+    {
+      "path": "tests/integration/payroll-finding-actions.test.tsx",
+      "title": "clears a draft without saving and shows submitted notes after remount",
+      "expectedReason": "Typed card stub awaits implementation",
+      "outputPattern": "Payroll finding card contract pending"
+    },
+    {
+      "path": "tests/integration/components/unified-payroll-findings.test.tsx",
+      "title": "filters all four severities without changing totals or the payroll route",
+      "expectedReason": "Typed list stub awaits implementation",
+      "outputPattern": "Payroll findings list contract pending"
+    },
+    {
+      "path": "tests/integration/components/unified-payroll-findings.test.tsx",
+      "title": "starts expanded with findings and preserves filters across collapse",
+      "expectedReason": "Typed list stub awaits implementation",
+      "outputPattern": "Payroll findings list contract pending"
+    },
+    {
+      "path": "tests/integration/components/unified-payroll-findings.test.tsx",
+      "title": "withholds published rows and totals while checks are Running",
+      "expectedReason": "Typed list stub awaits implementation",
+      "outputPattern": "Payroll findings list contract pending"
+    },
+    {
+      "path": "tests/integration/components/unified-payroll-findings.test.tsx",
+      "title": "starts collapsed without findings and reveals empty filters on request",
+      "expectedReason": "Typed list stub awaits implementation",
+      "outputPattern": "Payroll findings list contract pending"
+    }
+  ],
+  "frozenTestStructure": []
+}

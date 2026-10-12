@@ -1,0 +1,258 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-dismissal.test.tsx:
+(pass) payroll finding dismissal > renders distinct translated QA CTA labels in en [195.23ms]
+(pass) payroll finding dismissal > renders distinct translated QA CTA labels in he [146.80ms]
+(pass) payroll finding dismissal > retains the default Review label when a CTA has no custom label [148.29ms]
+32 |   // throw errors w/ suggestions for better queries. Opt in so off by default.
+33 |   throwSuggestions: false,
+34 |   // called when getBy* queries fail. (message, container) => Error
+35 |   getElementError(message, container) {
+36 |     const prettifiedDOM = (0, _prettyDom.prettyDOM)(container);
+37 |     const error = new Error([message, `Ignored nodes: comments, ${config.defaultIgnore}\n${prettifiedDOM}`].filter(Boolean).join('\n\n'));
+                           ^
+TestingLibraryElementError: Found multiple elements with the text: Severity ceiling: Warning
+
+Here are the matching elements:
+
+Ignored nodes: comments, script, style
+[36m<p>[39m
+  [0mExact issue[0m
+  [0m ·[0m
+  [0m [0m
+  [0mBrain Gusikowski #1[0m
+  [0m [0m
+  [0m· [0m
+  [0mHide[0m
+  [0m · [0m
+  [0mSeverity ceiling[0m
+  [0m:[0m
+  [0m [0m
+  [0mWarning[0m
+[36m</p>[39m
+
+Ignored nodes: comments, script, style
+[36m<p>[39m
+  [0mExact issue[0m
+  [0m ·[0m
+  [0m [0m
+  [0mBrain Gusikowski #1[0m
+  [0m [0m
+  [0m· [0m
+  [0mHide[0m
+  [0m · [0m
+  [0mSeverity ceiling[0m
+  [0m:[0m
+  [0m [0m
+  [0mWarning[0m
+[36m</p>[39m
+
+(If this is intentional, then use the `*AllBy*` variant of the query (like `queryAllByText`, `getAllByText`, or `findAllByText`)).
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+  [36m<div />[39m
+  [36m<div>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 cursor-pointer border bg-background shadow-xs not-disabled:hover:bg-accent not-disabled:hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:not-disabled:hover:bg-input/50 h-9 px-4 py-2 has-[>svg]:px-3"[39m
+      [33mdata-slot[39m=[32m"button"[39m
+    [36m>[39m
+      [0mActive[0m
+    [36m</button>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"@container border-t p-3 border-warning/20 bg-warning-wash/35"[39m
+      [33mdata-testid[39m=[32m"payroll-finding-card-alert-5485768c-bf65-47cb-b806-6c8c93462479"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex min-w-0 flex-col gap-3 @[42rem]:flex-row @[42rem]:items-start"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex min-w-0 flex-1 items-start gap-3"[39m
+        [36m>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-warning-wash text-warning-strong"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-triangle-alert size-4"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"24"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"24"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 9v4"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 17h.01"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</span>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"min-w-0 flex-1 space-y-2"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"text-sm font-semibold text-warning-strong"[39m
+            [36m>[39m
+              [0mQA warning 1: gross pay of ₪750 exceeds the ₪500 review threshold.[0m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-2"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-neutral-wash text-neutral-strong hover:bg-neutral-wash/80 px-2 py-1 text-xs"[39m
+              [36m>[39m
+                [0mAnomaly[0m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-warning-wash text-warning-strong hover:bg-warning-wash/80 px-2 py-1 text-xs gap-1"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"size-1.5 rounded-full bg-warning"[39m
+                [36m/>[39m
+                [0mWarning[0m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-neutral-wash text-neutral-strong hover:bg-neutral-wash/80 px-2 py-1 text-xs"[39m
+              [36m>[39m
+                [0mDismissed[0m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"text-xs font-normal leading-5 text-muted-foreground"[39m
+            [36m>[39m
+              [0mReview the gross pay and confirm that the recorded amount is expected for this employee.[0m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"space-y-3 border-t border-border pt-3"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"space-y-2 text-xs text-muted-foreground"[39m
+                [33mdata-testid[39m=[32m"dismissal-alert_dismissal-966e0853-4cff-4d1b-8d41-b6b4f6885dd7"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex flex-wrap items-center gap-2"[39m
+                [36m>[39m
+                  [36m<span>[39m
+                    [0mDismissed by[0m
+                    [0m: [0m
+                    [0mTest[0m
+                    [0m [0m
+                    [0mUser[0m
+                  [36m</span>[39m
+                  [36m<time[39m
+                    [33mdatetime[39m=[32m"2026-09-23T16:56:58.000Z"[39m
+                  [36m>[39m
+                    [0mSep 23, 2026 at 4:56 PM[0m
+                  [36m</time>[39m
+                  [36m<div[39m
+                    [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-neutral-wash text-neutral-strong hover:bg-neutral-wash/80 px-2 py-1 text-xs"[39m
+                  [36m>[39m
+                    [0mCovered by a newer decision[0m
+                  [36m</div>[39m
+                [36m</div>[39m
+                [36m<p[39m
+                  [33mclass[39m=[32m"whitespace-pre-wrap break-words font-medium text-foreground"[39m
+                [36m>[39m
+                  [0mDismissal reason[0m
+                  [0m: [0m
+                  [0mSecond decision[0m
+                [36m</p>[39m
+                [36m<p>[39m
+                  [0mCovered months[0m
+                  [0m: [0m
+                  [0mAug 2026 – Sep 2026 · 2 payroll months remaining[0m
+                [36m</p>[39m
+                [36m<p>[39m
+                  [0mExact issue[0m
+                  [0m ·[0m
+                  [0m [0m
+                  [0mBrain Gusikowski #1[...
+      at getElementError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/config.js:37:23)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:55:13)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:95:19)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:178:14)
+(fail) payroll finding dismissal > shows persisted documents and undoes one decision while the other stays dismissed [185.00ms]
+(pass) payroll finding dismissal > shows the reason limit and still requires a document after correction [227.35ms]
+(pass) payroll finding dismissal > keeps a reason mandatory when dismissing without files [155.45ms]
+(pass) payroll finding dismissal > localizes the QA category in en instead of showing its internal check ID [112.15ms]
+(pass) payroll finding dismissal > localizes the QA category in he instead of showing its internal check ID [123.00ms]
+
+tests/unit/api/alert-schemas.test.ts:
+(pass) alert dismissal input schema > requires positive months for month-based dismissals and at least one document [1.50ms]
+(pass) alert dismissal input schema > rejects company-wide until-data-changes dismissals [0.13ms]
+(pass) alert public response schema > validates every persisted structured JSON field at runtime [2.35ms]
+(pass) alert public response schema > accepts canonical persisted CTA and revision values [0.15ms]
+(pass) alert public response schema > accepts persisted uploader identifiers that are not database schema IDs [0.55ms]
+(pass) alert public response schema > keeps status and effective severity as one discriminated state [0.78ms]
+
+tests/unit/api/alerts.test.ts:
+(pass) alert read APIs > returns shared structured alerts and aligned four-severity counts [79.06ms]
+(pass) alert read APIs > paginates millisecond-apart updates in the same second without gaps or duplicates [93.87ms]
+(pass) alert read APIs > uses alert ID as the stable cursor tie-breaker for equal timestamps [75.14ms]
+(pass) alert read APIs > rejects decoded cursors whose values do not match the cursor schema [52.88ms]
+(pass) alert read APIs > keeps aggregated counts aligned with effective warning, info, and hide visibility [115.07ms]
+(pass) alert dismissal details > returns the dismissal actor and time without exposing private user fields [63.73ms]
+(pass) alert read readiness > get returns only the requested ready alert [64.06ms]
+(pass) alert read readiness > get hides a requested alert when its readiness is not Ready [69.13ms]
+(pass) alert read readiness > treats missing check state as Running and hides unproven alerts [75.39ms]
+(pass) alert read readiness > omits stale alerts while exact revisions are Running and reveals them only when Ready [137.41ms]
+(pass) alert cleared visibility > omits automatically cleared alerts from every user-facing tab, count, and direct read [85.09ms]
+(pass) alert read authorization > enforces tenant, employee context, role exceptions, and alternate grants [153.97ms]
+(pass) alert direct-read authorization > does not infer tenant or employee scope from a target alert ID [114.80ms]
+(pass) alert mutations > rejects dismissal without evidence even when read and dismiss are allowed [120.80ms]
+(pass) alert mutations > enforces read, note, dismiss, and company-dismiss permissions independently [293.80ms]
+(pass) alert operation permissions > denies undo to a dismisser without changing the persisted decision [100.39ms]
+(pass) alert operation permissions > allows undo without granting dismissal permission [127.30ms]
+(pass) alert operation permissions > requires company undo permission for fresh and replayed company restoration [168.50ms]
+(pass) alert company mutation scope > rejects fresh and replayed company dismiss and undo from an employee context [136.90ms]
+(pass) alert mutation replay > idempotently dismisses, notes, and atomically undoes [133.58ms]
+(pass) alert mutation replay > authorizes dismiss replay using persisted reach after company permission revocation [101.14ms]
+(pass) alert mutation replay > returns the committed result to concurrent retries [87.40ms]
+(pass) alert mutation readiness > rejects mutations outside the currently edited payroll month [70.68ms]
+(pass) alert mutation readiness > rejects new mutations while exact-revision readiness is stale [122.91ms]
+(pass) alert read output validation > rejects malformed persisted structured fields at the router boundary [99.22ms]
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+(pass) evidence-backed dismissal contract > requires a reason and document without changing the finding [67.50ms]
+(pass) evidence-backed dismissal contract > persists documents and policy once and keeps evidence immutable after undo [137.41ms]
+(pass) evidence-backed dismissal contract > undoes only the selected overlap and preserves the other decision on retries [83.95ms]
+(pass) evidence-backed dismissal contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [113.41ms]
+(pass) evidence-backed dismissal contract > rejects another uploader or alert's staged evidence [142.37ms]
+(pass) evidence-backed dismissal contract > registers a signed upload idempotently and rejects unsigned or cross-alert reuse [104.14ms]
+(pass) evidence-backed dismissal contract > keeps lower-severity findings from being promoted by an older visibility override [110.67ms]
+
+tests/integration/hooks/usePayrollAlerts.test.tsx:
+(pass) usePayrollAlerts real API integration > refreshes list/counts after evidence-backed dismissal and selected undo [372.50ms]
+(pass) usePayrollAlerts real API integration > suppresses items and counts while exact-revision readiness is Running [104.22ms]
+
+tests/unit/services/alert-checks/dismissal.test.ts:
+(pass) alert dismissal decisions > keeps localized dismissal duration rules in the domain service [3.32ms]
+(pass) alert dismissal decisions > accepts a route-authorized context without controller permission metadata [109.46ms]
+(pass) alert dismissal decisions > fingerprints suggestion values deterministically [1.85ms]
+(pass) alert dismissal decisions > preserves required evidence and invalidates an until-data-changes decision when values change [62.10ms]
+(pass) alert dismissal decisions > undoes the selected decision without removing the overlapping decision [684.22ms]
+(pass) alert dismissal decisions > returns only decisions for the alert employee and causes ordered by createdAt then id [106.13ms]
+(pass) alert dismissal decisions > undoes a decision that covers an alert in a later payroll month [90.57ms]
+(pass) alert dismissal decisions > applies company month decisions to matching employee alerts and rejects data-change reach [145.17ms]
+(pass) alert dismissal decisions > never applies a dismissal to a different alert type [86.56ms]
+(pass) alert dismissal decisions > covers the recorded severity and lower levels but never escalation [137.03ms]
+(pass) alert dismissal decisions > scopes employee dismissals and reads to the selected employee [57.72ms]
+(pass) alert dismissal decisions > rejects cross-company access and an attached document from another employee [60.11ms]
+
+1 tests failed:
+(fail) payroll finding dismissal > shows persisted documents and undoes one decision while the other stays dismissed [185.00ms]
+
+ 59 pass
+ 1 fail
+ 225 expect() calls
+Ran 60 tests across 6 files. [8.15s]

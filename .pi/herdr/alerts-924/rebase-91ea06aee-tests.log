@@ -1,0 +1,199 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-dismissal.test.tsx:
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in en [312.28ms]
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in he [152.26ms]
+(pass) payroll finding dismissal > retains the default Review label when a CTA has no custom label [669.66ms]
+(pass) payroll finding dismissal > offers Review, other CTAs, dismissal and notes in one compact actions popover [151.81ms]
+(pass) payroll finding dismissal > labels a single document CTA Review [171.87ms]
+(pass) payroll finding dismissal > returns saved notes with their authors only on the matching alert in list and get [251.07ms]
+(pass) payroll finding dismissal > clears an inline note draft without saving and shows submitted notes after remount [517.05ms]
+(pass) payroll finding dismissal > dismisses a restored finding with only a reason and focuses the surviving control [401.24ms]
+(pass) payroll finding dismissal > shows persisted notes and undoes one decision while the other stays dismissed [674.78ms]
+(pass) payroll finding dismissal > accepts a corrected mandatory note without documents [894.84ms]
+(pass) payroll finding dismissal > offers only month durations and saves twelve months for the named company without an upload [797.57ms]
+(pass) payroll finding dismissal > keeps a reason mandatory when dismissing without files [414.13ms]
+(pass) payroll finding dismissal > localizes the QA category in en instead of showing its internal check ID [141.53ms]
+(pass) payroll finding dismissal > localizes the QA category in he instead of showing its internal check ID [132.06ms]
+
+tests/unit/components/header-month-picker-close.test.ts:
+(pass) header month switch warning transition > keeps the same dialog mounted while confirmation swaps back to pending close work [0.06ms]
+(pass) header month close warning acknowledgement > does not close when warning confirmation is canceled [2.90ms]
+(pass) header month close warning acknowledgement > acknowledges exactly the warning fence after confirmation [0.31ms]
+(pass) header month close warning acknowledgement > re-presents refreshed warnings when the confirmed warning fence changes [0.75ms]
+(pass) header month close warning acknowledgement > stops when the server repeats an unchanged warning confirmation [6.38ms]
+(pass) header month close warning acknowledgement > keeps the changedOrRunning close-gate outcome actionable instead of retrying [4.19ms]
+(pass) header month close warning acknowledgement > keeps the activeBlockers close-gate outcome actionable instead of retrying [0.10ms]
+(pass) header month close warning acknowledgement > keeps the alertSetChanged close-gate outcome actionable instead of retrying [0.06ms]
+(pass) header month close warning acknowledgement > closes warning-free months in one evaluation [0.12ms]
+(pass) header month close warning acknowledgement > does not offer acknowledgement without permission [0.09ms]
+
+tests/unit/api/alert-schemas.test.ts:
+(pass) alert dismissal input schema > requires positive months for month-based dismissals [0.89ms]
+(pass) alert dismissal input schema > rejects company-wide until-data-changes dismissals [0.12ms]
+(pass) alert public response schema > validates every persisted structured JSON field at runtime [5.21ms]
+(pass) alert public response schema > accepts canonical persisted CTA and revision values [0.17ms]
+155 |       ],
+156 |       nextCursor: null,
+157 |       readiness: [],
+158 |     };
+159 | 
+160 |     expect(alertListOutputSchema.safeParse(response).success).toBe(true);
+                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/api/alert-schemas.test.ts:160:63)
+(fail) alert public response schema > accepts persisted uploader identifiers that are not database schema IDs [1.28ms]
+173 |         },
+174 |       ],
+175 |       nextCursor: null,
+176 |       readiness: [],
+177 |     };
+178 |     expect(alertListOutputSchema.safeParse(response).success).toBe(true);
+                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/unit/api/alert-schemas.test.ts:178:63)
+(fail) alert public response schema > keeps status and effective severity as one discriminated state [0.20ms]
+
+tests/unit/api/alerts.test.ts:
+(pass) alert read APIs > returns shared structured alerts and aligned four-severity counts [103.76ms]
+(pass) alert read APIs > paginates millisecond-apart updates in the same second without gaps or duplicates [105.83ms]
+(pass) alert read APIs > uses alert ID as the stable cursor tie-breaker for equal timestamps [81.98ms]
+(pass) alert read APIs > rejects decoded cursors whose values do not match the cursor schema [84.39ms]
+(pass) alert read APIs > keeps aggregated counts aligned with effective warning, info, and hide visibility [253.13ms]
+(pass) alert dismissal details > returns the dismissal actor and time without exposing private user fields [170.22ms]
+(pass) alert read readiness > get returns only the requested ready alert [111.65ms]
+(pass) alert read readiness > get hides a requested alert when its readiness is not Ready [207.78ms]
+(pass) alert read readiness > treats missing check state as Running and hides unproven alerts [261.32ms]
+(pass) alert read readiness > omits stale alerts while exact revisions are Running and reveals them only when Ready [651.03ms]
+(pass) alert cleared visibility > omits automatically cleared alerts from every user-facing tab, count, and direct read [366.69ms]
+(pass) alert read authorization > enforces tenant, employee context, role exceptions, and alternate grants [341.22ms]
+(pass) alert direct-read authorization > does not infer tenant or employee scope from a target alert ID [122.48ms]
+(pass) alert mutations > allows note-only dismissal with read and dismiss permissions [308.60ms]
+(pass) alert mutations > enforces read, note, dismiss, and company-dismiss permissions independently [225.71ms]
+(pass) alert operation permissions > denies undo to a dismisser without changing the persisted decision [158.79ms]
+(pass) alert operation permissions > allows undo without granting dismissal permission [167.39ms]
+(pass) alert operation permissions > requires company undo permission for fresh and replayed company restoration [186.39ms]
+(pass) alert company mutation scope > rejects fresh and replayed company dismiss and undo from an employee context [150.69ms]
+(pass) alert mutation replay > idempotently dismisses, notes, and atomically undoes [360.48ms]
+(pass) alert mutation replay > authorizes dismiss replay using persisted reach after company permission revocation [239.20ms]
+(pass) alert mutation replay > returns the committed result to concurrent retries [638.82ms]
+(pass) alert mutation readiness > rejects mutations outside the currently edited payroll month [614.08ms]
+(pass) alert mutation readiness > rejects new mutations while exact-revision readiness is stale [612.74ms]
+(pass) alert read output validation > rejects malformed persisted structured fields at the router boundary [212.02ms]
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+(pass) dismissal policy contract > requires a note and accepts dismissal without documents [129.81ms]
+(pass) dismissal policy contract > undoes only the selected overlap and preserves the other decision on retries [187.60ms]
+(pass) dismissal policy contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [209.87ms]
+(pass) dismissal policy contract > keeps lower-severity findings from being promoted by an older visibility override [238.65ms]
+
+tests/unit/controllers/fileStorage.test.ts:
+(pass) Document Controller > createDocument > should create a document for an employee [733.84ms]
+(pass) Document Controller > createDocument > should auto-increment version for same name [233.81ms]
+(pass) Document Controller > createDocument > should reject access to employee in another company without deleting the supplied file [287.65ms]
+(pass) Document Controller > createDocument > should not delete the supplied file when router context validation fails [64.97ms]
+(pass) Document Controller > createDocument > should not delete the supplied file when permission validation fails [79.49ms]
+(pass) Document Controller > createDocument > should clean up the uploaded file when persistence fails after access checks [69.62ms]
+(pass) Document Controller > createDocument > should not clean up an unverified file key after a persistence failure [78.27ms]
+(pass) Document Controller > listDocuments > should return empty array when no documents exist [41.50ms]
+(pass) Document Controller > listDocuments > should return all versions ordered by createdAt desc [68.08ms]
+(pass) Document Controller > listDocuments > should not return soft-deleted documents [154.33ms]
+(pass) Document Controller > listDocuments > should reject listing for employee in another company [60.85ms]
+(pass) Document Controller > getDocumentWithAccess > should return document when caller has access [40.72ms]
+(pass) Document Controller > getDocumentWithAccess > should reject access to document in another company [45.53ms]
+(pass) Document Controller > getDocumentWithAccess > should throw NOT_FOUND for non-existent document [65.06ms]
+(pass) Document Controller > getDownloadUrl > should return signed URL for document [125.08ms]
+(pass) Document Controller > getDownloadUrl > should throw when file is not available [40.08ms]
+(pass) Document Controller > updateDocumentFields > should update name and notes [31.93ms]
+(pass) Document Controller > updateDocumentFields > should clear notes with null [39.24ms]
+(pass) Document Controller > updateDocumentFields > should throw NOT_FOUND for deleted document [37.61ms]
+(pass) Document Controller > updateDocumentFields > rejects updates to dismissal-attached evidence with Forbidden [63.26ms]
+(pass) Document Controller > softDeleteDocument > should soft delete a document [36.32ms]
+(pass) Document Controller > softDeleteDocument > should throw NOT_FOUND for non-existent document [28.66ms]
+(pass) Document Controller > destructive document operations > rejects dismissal-attached evidence during soft deletion [54.73ms]
+(pass) Document Controller > destructive document operations > rejects dismissal-attached evidence during hard deletion [70.47ms]
+(pass) Document Controller > destructive document operations > marks document-backed alerts as source_removed after soft deletion [36.92ms]
+(pass) Document Controller > destructive document operations > marks document-backed alerts as source_removed after hard deletion [41.67ms]
+(pass) Document Controller > destructive document operations > requires matching company scope for soft deletion [41.39ms]
+(pass) Document Controller > destructive document operations > requires matching company scope for hard deletion [34.66ms]
+(pass) Document Controller > listDocumentVersions > should return all versions ordered by version desc [26.90ms]
+(pass) Document Controller > listDocumentVersions > should not include soft-deleted versions [21.26ms]
+(pass) Document Controller > entity access scoping > should reject employee access when company scope is absent [19.12ms]
+(pass) Document Controller > entity access scoping > should reject company access when company scope is absent [23.08ms]
+(pass) Document Controller > entity access scoping > should reject department access when department scope is absent [22.93ms]
+(pass) Document Controller > entity access scoping > should allow global general access without company or department scope [18.41ms]
+(pass) Document Controller > entity access scoping > should allow company documents for own company [27.63ms]
+(pass) Document Controller > entity access scoping > should reject company documents for other company [37.34ms]
+(pass) Document Controller > entity access scoping > should allow general documents with entityId 'global' [23.13ms]
+(pass) Document Controller > entity access scoping > should reject general documents with arbitrary entityId [23.75ms]
+
+tests/integration/components/unified-payroll-findings.test.tsx:
+(pass) shared payroll findings > filters all four severities without changing status totals or the payroll route [273.58ms]
+(pass) shared payroll findings > combines dismissed status with severity and preserves decision provenance [189.95ms]
+(pass) shared payroll findings > persists reason-only dismissal and undo through the real APIs [342.12ms]
+(pass) shared payroll findings > starts expanded with active findings and preserves filters across collapse [210.50ms]
+(pass) shared payroll findings > starts collapsed with only dismissed findings and allows reviewing them [185.21ms]
+(pass) shared payroll findings > loads further findings without losing the selected scope or duplicating rows [200.96ms]
+(pass) shared payroll findings > withholds published rows and totals while checks are Running [101.78ms]
+(pass) shared payroll findings > starts collapsed without active findings and reveals the empty filters on request [213.64ms]
+
+tests/integration/hooks/usePayrollAlerts.test.tsx:
+(pass) usePayrollAlerts real API integration > refreshes list/counts after note-only dismissal and selected undo [1304.61ms]
+(pass) usePayrollAlerts real API integration > suppresses items and counts while exact-revision readiness is Running [119.38ms]
+
+tests/unit/services/alert-checks/close-gate.test.ts:
+(pass) close gate policy > alert policy and fencing > compares revision tuples without delimiter collisions [7.62ms]
+(pass) close gate policy > alert policy and fencing > critical remains an active close blocker [83.01ms]
+(pass) close gate policy > alert policy and fencing > error remains an active close blocker [51.25ms]
+(pass) close gate policy > alert policy and fencing > a dismissal for another alert type does not suppress a blocker [89.09ms]
+(pass) close gate policy > alert policy and fencing > an error blocker hidden after review rejects the stale close [50.94ms]
+(pass) close gate policy > alert policy and fencing > close rejections preserve typed transport codes and message keys [66.52ms]
+(pass) close gate policy > alert policy and fencing > info-only state closes without acknowledgement [45.90ms]
+(pass) close gate policy > alert policy and fencing > warnings require collective acknowledgement [45.54ms]
+(pass) close gate policy > alert policy and fencing > warning acknowledgement requires permission [60.41ms]
+(pass) close gate policy > alert policy and fencing > authorized acknowledgement records the exact warning set [100.74ms]
+(pass) close gate policy > alert policy and fencing > running readiness wins before alert policy [79.16ms]
+(pass) close gate policy > alert policy and fencing > changed generations reject the reviewed snapshot [58.55ms]
+(pass) close gate policy > alert policy and fencing > changed revisions reject the reviewed snapshot [41.37ms]
+(pass) close gate policy > alert policy and fencing > changed warning set rejects acknowledgement [43.51ms]
+(pass) close gate policy > alert policy and fencing > success snapshots are immutable [35.04ms]
+(pass) close gate policy > stored snapshot replay > successful close retries return the immutable stored snapshot [57.96ms]
+(pass) close gate policy > close alert-check isolation > new close and replay create no alert-check queue data [56.36ms]
+(pass) close gate policy > close alert-check isolation > resolver failure cannot roll back month advancement or its snapshot [49.43ms]
+(pass) close gate policy > close lifecycle > a bodyless legacy close derives its fence transactionally and replays safely [28.22ms]
+(pass) close gate policy > close lifecycle > a reopened month records a new close instead of replaying the prior close [45.30ms]
+(pass) close gate policy > close lifecycle > replays a matching historical snapshot after a newer re-close [58.19ms]
+(pass) close gate policy > readiness > a newer queued generation keeps close running despite older successful results [38.31ms]
+
+tests/unit/services/alert-checks/dismissal.test.ts:
+(pass) alert dismissal decisions > keeps localized dismissal duration rules in the domain service [3.03ms]
+(pass) alert dismissal decisions > accepts a route-authorized context without controller permission metadata [57.43ms]
+(pass) alert dismissal decisions > fingerprints suggestion values deterministically [1.76ms]
+(pass) alert dismissal decisions > preserves optional evidence and invalidates an until-data-changes decision when values change [72.45ms]
+(pass) alert dismissal decisions > monthly causes matching respects changed values and the selected expiry [106.10ms]
+(pass) alert dismissal decisions > monthly alert_type matching respects changed values and the selected expiry [100.88ms]
+(pass) alert dismissal decisions > undoes the selected decision without removing the overlapping decision [65.41ms]
+(pass) alert dismissal decisions > returns only decisions for the alert employee and causes ordered by createdAt then id [173.83ms]
+(pass) alert dismissal decisions > undoes a decision that covers an alert in a later payroll month [106.10ms]
+(pass) alert dismissal decisions > applies company month decisions to matching employee alerts and rejects data-change reach [196.84ms]
+(pass) alert dismissal decisions > never applies a dismissal to a different alert type [61.38ms]
+(pass) alert dismissal decisions > covers the recorded severity and lower levels but never escalation [96.85ms]
+(pass) alert dismissal decisions > scopes employee dismissals and reads to the selected employee [95.76ms]
+(pass) alert dismissal decisions > rejects cross-company access and an attached document from another employee [73.61ms]
+
+2 tests failed:
+(fail) alert public response schema > accepts persisted uploader identifiers that are not database schema IDs [1.28ms]
+(fail) alert public response schema > keeps status and effective severity as one discriminated state [0.20ms]
+
+ 141 pass
+ 2 fail
+ 503 expect() calls
+Ran 143 tests across 10 files. [24.41s]

@@ -1,0 +1,150 @@
+bun test v1.4.2 (744846f84)
+
+tests/unit/api/alert-schemas.test.ts:
+(pass) alert dismissal input schema > requires positive months for month-based dismissals and at least one document [1.38ms]
+(pass) alert dismissal input schema > rejects company-wide until-data-changes dismissals [0.18ms]
+(pass) alert public response schema > validates every persisted structured JSON field at runtime [1.86ms]
+(pass) alert public response schema > accepts canonical persisted CTA and revision values [0.15ms]
+(pass) alert public response schema > accepts persisted uploader identifiers that are not database schema IDs [0.63ms]
+(pass) alert public response schema > keeps status and effective severity as one discriminated state [0.20ms]
+
+tests/unit/api/alerts.test.ts:
+(pass) alert read APIs > returns shared structured alerts and aligned four-severity counts [87.32ms]
+(pass) alert read APIs > paginates millisecond-apart updates in the same second without gaps or duplicates [58.74ms]
+(pass) alert read APIs > uses alert ID as the stable cursor tie-breaker for equal timestamps [49.43ms]
+(pass) alert read APIs > rejects decoded cursors whose values do not match the cursor schema [33.81ms]
+27 | 
+28 | export { AlertDismissalRuleError } from "@/server/services/alert-checks/errors";
+29 | 
+30 | export function assertDismissibleAlert(alert: Pick<Alert, "severity">, visibility: AlertDismissalVisibility = "hide") {
+31 |   if (alert.severity === "critical") {
+32 |     throw new AlertDismissalRuleError(MESSAGES.AlertsPage.errors.criticalDismissalForbidden);
+               ^
+TRPCError: AlertsPage.errors.criticalDismissalForbidden
+  code: "BAD_REQUEST"
+
+      at assertDismissibleAlert (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/alert-dismissals.ts:32:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:88:7)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:294:28)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:40:20)
+      at async transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:71:28)
+      at async withTransaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:37:27)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:308:20)
+      at async withSqliteBusyRetry (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:489:20)
+
+37 |     } as const;
+38 |     super({
+39 |       ...defaults,
+40 |       ...opts,
+41 |       message: opts.messageKey,
+42 |       cause: new _MessageCause({ ...defaults, ...opts }),
+                  ^
+error: AlertsPage.errors.criticalDismissalForbidden
+  ctaUrl: undefined,
+ details: undefined,
+   field: undefined,
+   cause: undefined,
+
+      at new ServerError (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/trpc/errors.server.ts:42:14)
+      at new AlertDismissalRuleError (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/errors.ts:7:5)
+      at assertDismissibleAlert (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/services/alert-checks/alert-dismissals.ts:32:11)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:88:7)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:294:28)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:40:20)
+      at async transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:71:28)
+      at async withTransaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/lib/transaction.ts:37:27)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:308:20)
+      at async withSqliteBusyRetry (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts.ts:489:20)
+(fail) alert read APIs > keeps aggregated counts aligned with effective warning, info, and hide visibility [45.21ms]
+(pass) alert dismissal details > returns the dismissal actor and time without exposing private user fields [67.24ms]
+(pass) alert read readiness > get returns only the requested ready alert [47.77ms]
+(pass) alert read readiness > get hides a requested alert when its readiness is not Ready [39.90ms]
+(pass) alert read readiness > treats missing check state as Running and hides unproven alerts [43.20ms]
+(pass) alert read readiness > omits stale alerts while exact revisions are Running and reveals them only when Ready [44.31ms]
+367 |         throw mapSqliteError(e);
+368 |     }
+369 | }
+370 | function mapSqliteError(e) {
+371 |     if (e instanceof Database.SqliteError) {
+372 |         return new LibsqlError(e.message, e.code, e.rawCode, e);
+                         ^
+TRPCError: SQLITE_BUSY: database is locked
+  code: "INTERNAL_SERVER_ERROR"
+
+      at mapSqliteError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:372:20)
+      at executeStmt (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:277:15)
+      at transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:125:9)
+      at transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:61:40)
+      at countAlerts (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts/queries.ts:141:27)
+      at resolveMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:221:23)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:60:24)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+
+367 |         throw mapSqliteError(e);
+368 |     }
+369 | }
+370 | function mapSqliteError(e) {
+371 |     if (e instanceof Database.SqliteError) {
+372 |         return new LibsqlError(e.message, e.code, e.rawCode, e);
+                         ^
+LibsqlError: SQLITE_BUSY: database is locked
+ rawCode: 5,
+    code: "SQLITE_BUSY"
+
+      at mapSqliteError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:372:20)
+      at executeStmt (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:277:15)
+      at transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@libsql/client/lib-esm/sqlite3.js:125:9)
+      at transaction (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/drizzle-orm/libsql/session.js:61:40)
+      at countAlerts (/Users/OmryN/payslick/app/wt/omry/alerts-924/src/server/controllers/alerts/queries.ts:141:27)
+      at resolveMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:221:23)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+      at outputValidatorMiddleware (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:60:24)
+      at callRecursive (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@trpc/server/dist/initTRPC-DGaJyg8t.mjs:256:24)
+(fail) alert cleared visibility > omits automatically cleared alerts from every user-facing tab, count, and direct read [41.11ms]
+(pass) alert read authorization > enforces tenant, employee context, role exceptions, and alternate grants [66.64ms]
+(pass) alert direct-read authorization > does not infer tenant or employee scope from a target alert ID [40.80ms]
+(pass) alert mutations > rejects dismissal without evidence even when read and dismiss are allowed [51.64ms]
+(pass) alert mutations > enforces read, note, dismiss, and company-dismiss permissions independently [95.62ms]
+(pass) alert operation permissions > denies undo to a dismisser without changing the persisted decision [49.55ms]
+(pass) alert operation permissions > allows undo without granting dismissal permission [59.58ms]
+(pass) alert operation permissions > requires company undo permission for fresh and replayed company restoration [70.90ms]
+(pass) alert company mutation scope > rejects fresh and replayed company dismiss and undo from an employee context [56.23ms]
+(pass) alert mutation replay > idempotently dismisses, notes, and atomically undoes [71.02ms]
+(pass) alert mutation replay > authorizes dismiss replay using persisted reach after company permission revocation [51.97ms]
+(pass) alert mutation replay > returns the committed result to concurrent retries [60.98ms]
+(pass) alert mutation readiness > rejects mutations outside the currently edited payroll month [42.89ms]
+(pass) alert mutation readiness > rejects new mutations while exact-revision readiness is stale [39.61ms]
+(pass) alert read output validation > rejects malformed persisted structured fields at the router boundary [79.35ms]
+
+tests/unit/api/alert-dismissal-contract.test.ts:
+(pass) evidence-backed dismissal contract > requires a reason and document without changing the finding [47.11ms]
+(pass) evidence-backed dismissal contract > persists documents and policy once and keeps evidence immutable after undo [68.05ms]
+(pass) evidence-backed dismissal contract > undoes only the selected overlap and preserves the other decision on retries [56.90ms]
+(pass) evidence-backed dismissal contract > rejects critical dismissal and ignores stored critical decisions in lists and counts [49.61ms]
+(pass) evidence-backed dismissal contract > rejects another uploader or alert's staged evidence [75.10ms]
+(pass) evidence-backed dismissal contract > registers a signed upload idempotently and rejects unsigned or cross-alert reuse [94.09ms]
+(pass) evidence-backed dismissal contract > keeps lower-severity findings from being promoted by an older visibility override [59.79ms]
+
+tests/unit/services/alert-checks/dismissal.test.ts:
+(pass) alert dismissal decisions > keeps localized dismissal duration rules in the domain service [1.58ms]
+(pass) alert dismissal decisions > accepts a route-authorized context without controller permission metadata [27.99ms]
+(pass) alert dismissal decisions > fingerprints suggestion values deterministically [1.41ms]
+(pass) alert dismissal decisions > preserves required evidence and invalidates an until-data-changes decision when values change [36.13ms]
+(pass) alert dismissal decisions > undoes the selected decision without removing the overlapping decision [39.20ms]
+(pass) alert dismissal decisions > returns only decisions for the alert employee and causes ordered by createdAt then id [38.87ms]
+(pass) alert dismissal decisions > undoes a decision that covers an alert in a later payroll month [41.85ms]
+(pass) alert dismissal decisions > applies company month decisions to matching employee alerts and rejects data-change reach [89.42ms]
+(pass) alert dismissal decisions > never applies a dismissal to a different alert type [29.41ms]
+(pass) alert dismissal decisions > covers the recorded severity and lower levels but never escalation [38.48ms]
+(pass) alert dismissal decisions > scopes employee dismissals and reads to the selected employee [31.57ms]
+(pass) alert dismissal decisions > rejects cross-company access and an attached document from another employee [30.97ms]
+
+2 tests failed:
+(fail) alert read APIs > keeps aggregated counts aligned with effective warning, info, and hide visibility [45.21ms]
+(fail) alert cleared visibility > omits automatically cleared alerts from every user-facing tab, count, and direct read [41.11ms]
+
+ 48 pass
+ 2 fail
+ 153 expect() calls
+Ran 50 tests across 4 files. [4.32s]

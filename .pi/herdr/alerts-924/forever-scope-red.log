@@ -1,0 +1,510 @@
+bun test v1.4.2 (744846f84)
+
+tests/integration/payroll-finding-dismissal.test.tsx:
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in en [160.98ms]
+(pass) payroll finding dismissal > uses the translated Review label even for custom CTAs in he [121.19ms]
+(pass) payroll finding dismissal > retains the default Review label when a CTA has no custom label [112.02ms]
+(pass) payroll finding dismissal > offers Review, other CTAs, dismissal and notes in one compact actions popover [110.67ms]
+(pass) payroll finding dismissal > labels a single document CTA Review [114.31ms]
+(pass) payroll finding dismissal > returns saved notes with their authors only on the matching alert in list and get [115.64ms]
+(pass) payroll finding dismissal > clears an inline note draft without saving and shows submitted notes after remount [159.34ms]
+(pass) payroll finding dismissal > dismisses a restored finding with only a reason and focuses the surviving control [307.23ms]
+(pass) payroll finding dismissal > shows persisted notes and undoes one decision while the other stays dismissed [159.97ms]
+(pass) payroll finding dismissal > accepts a corrected mandatory note without documents [191.64ms]
+368 |     const dialog = await openDismissal(screen);
+369 |     await waitForQueries();
+370 |     const duration = within(dialog).getByRole("combobox", { name: messages.dismissal.duration });
+371 |     fireEvent.keyDown(duration, { key: "ArrowDown" });
+372 |     const choices = await screen.findAllByRole("option");
+373 |     expect(choices.map((choice) => choice.textContent)).toEqual([
+                                                              ^
+error: expect(received).toEqual(expected)
+
+  [
+    "1 month (only current payslip)",
+    "2 payroll months",
+    "3 payroll months",
+    "6 payroll months",
+    "12 payroll months",
+-   "Forever",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:373:57)
+(fail) payroll finding dismissal > offers months and Forever and saves twelve months for the named company without an upload [177.45ms]
+32 |   // throw errors w/ suggestions for better queries. Opt in so off by default.
+33 |   throwSuggestions: false,
+34 |   // called when getBy* queries fail. (message, container) => Error
+35 |   getElementError(message, container) {
+36 |     const prettifiedDOM = (0, _prettyDom.prettyDOM)(container);
+37 |     const error = new Error([message, `Ignored nodes: comments, ${config.defaultIgnore}\n${prettifiedDOM}`].filter(Boolean).join('\n\n'));
+                           ^
+TestingLibraryElementError: Unable to find an accessible element with the role "option" and name "Forever"
+
+Here are the accessible roles:
+
+  listbox:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=open]:animate-in data-[side=left]:-translate-x-1 data-[side=top]:-translate-y-1 data-[side=right]:translate-x-1 data-[side=bottom]:translate-y-1"[39m
+    [33mdata-align[39m=[32m"start"[39m
+    [33mdata-side[39m=[32m"bottom"[39m
+    [33mdata-state[39m=[32m"open"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mid[39m=[32m"radix-_r_32_"[39m
+    [33mrole[39m=[32m"listbox"[39m
+    [33mstyle[39m=[32m"box-sizing: border-box; pointer-events: auto; display: flex; flex-direction: column; --radix-select-content-transform-origin: var(--radix-popper-transform-origin); --radix-select-content-available-width: var(--radix-popper-available-width); --radix-select-content-available-height: var(--radix-popper-available-height); --radix-select-trigger-width: var(--radix-popper-anchor-width); --radix-select-trigger-height: var(--radix-popper-anchor-height); outline-color: none; outline-style: none; outline-width: initial;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  presentation:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"p-1 h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"[39m
+    [33mdata-radix-select-viewport[39m=[32m""[39m
+    [33mrole[39m=[32m"presentation"[39m
+    [33mstyle[39m=[32m"position: relative; overflow: hidden auto; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  option:
+
+  Name "1 month (only current payslip)":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_3l_"[39m
+    [33maria-selected[39m=[32m"true"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-highlighted[39m=[32m""[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"checked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "2 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_3m_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "3 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_3n_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "6 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_3o_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "12 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_3p_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"2"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 cursor-pointer border bg-background shadow-xs not-disabled:hover:bg-accent not-disabled:hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:not-disabled:hover:bg-input/50 h-9 px-4 py-2 has-[>svg]:px-3"[39m
+      [33mdata-slot[39m=[32m"button"[39m
+    [36m>[39m
+      [0mActive[0m
+    [36m</button>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"@container border-t border-border bg-card px-3 py-2.5"[39m
+      [33mdata-testid[39m=[32m"payroll-finding-card-alert-f0fc3b83-6f1b-446c-b715-86f501db48e0"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex min-w-0 items-start gap-2"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-warning-wash text-warning-strong"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"lucide lucide-triangle-alert size-3.5"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 9v4"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 17h.01"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+        [36m</span>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1 space-y-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-2"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flow-root min-w-0 flex-1 text-sm leading-5"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"float-end ms-2 inline-flex max-w-full flex-wrap items-center gap-1.5"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-neutral-wash text-neutral-strong hover:bg-neutral-wash/80 px-2 py-1 text-xs"[39m
+                [36m>[39m
+                  [0mAnomaly[0m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-warning-wash text-warning-strong hover:bg-warning-wash/80 px-2 py-1 text-xs gap-1"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"size-1.5 rounded-full bg-warning"[39m
+                  [36m/>[39m
+                  [0mWarning[0m
+                [36m</div>[39m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-sm font-semibold break-words leading-5"[39m
+              [36m>[39m
+                [0mQA warning 1: gross pay of ₪750 exceeds the ₪500 review threshold.[0m
+              [36m</span>[39m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"shrink-0"[39m
+            [36m>[39m
+              [36m<button[39m
+                [33maria-controls[39m=[32m"radix-_r_2t_"[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-haspopup[39m=[32m"dialog"[39m
+                [33maria-label[39m=[32m"Actions"[39m
+                [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center whitespace-nowrap font-medium text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 cursor-pointer not-disabled:hover:bg-accent not-disabled:hover:text-accent-foreground dark:not-disabled:hover:bg-accent/50 gap-1.5 rounded-md has-[>svg]:px-2.5 size-7 p-0"[39m
+                [33mdata-slot[39m=[32m"button"[39m
+                [33mdata-state[39m=[32m"closed"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-ellipsis size-4"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+        ...
+      at getElementError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/config.js:37:23)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:76:38)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:52:17)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:95:19)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:437:30)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:439:11)
+(fail) payroll finding dismissal > locks Forever Exact issue to the employee after a company selection [156.95ms]
+32 |   // throw errors w/ suggestions for better queries. Opt in so off by default.
+33 |   throwSuggestions: false,
+34 |   // called when getBy* queries fail. (message, container) => Error
+35 |   getElementError(message, container) {
+36 |     const prettifiedDOM = (0, _prettyDom.prettyDOM)(container);
+37 |     const error = new Error([message, `Ignored nodes: comments, ${config.defaultIgnore}\n${prettifiedDOM}`].filter(Boolean).join('\n\n'));
+                           ^
+TestingLibraryElementError: Unable to find an accessible element with the role "option" and name "Forever"
+
+Here are the accessible roles:
+
+  listbox:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=open]:animate-in data-[side=left]:-translate-x-1 data-[side=top]:-translate-y-1 data-[side=right]:translate-x-1 data-[side=bottom]:translate-y-1"[39m
+    [33mdata-align[39m=[32m"start"[39m
+    [33mdata-side[39m=[32m"bottom"[39m
+    [33mdata-state[39m=[32m"open"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mid[39m=[32m"radix-_r_3v_"[39m
+    [33mrole[39m=[32m"listbox"[39m
+    [33mstyle[39m=[32m"box-sizing: border-box; pointer-events: auto; display: flex; flex-direction: column; --radix-select-content-transform-origin: var(--radix-popper-transform-origin); --radix-select-content-available-width: var(--radix-popper-available-width); --radix-select-content-available-height: var(--radix-popper-available-height); --radix-select-trigger-width: var(--radix-popper-anchor-width); --radix-select-trigger-height: var(--radix-popper-anchor-height); outline-color: none; outline-style: none; outline-width: initial;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  presentation:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"p-1 h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]"[39m
+    [33mdata-radix-select-viewport[39m=[32m""[39m
+    [33mrole[39m=[32m"presentation"[39m
+    [33mstyle[39m=[32m"position: relative; overflow: hidden auto; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  option:
+
+  Name "1 month (only current payslip)":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_4i_"[39m
+    [33maria-selected[39m=[32m"true"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-highlighted[39m=[32m""[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"checked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "2 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_4j_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "3 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_4k_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "6 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_4l_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  Name "12 payroll months":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"radix-_r_4m_"[39m
+    [33maria-selected[39m=[32m"false"[39m
+    [33mclass[39m=[32m"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"[39m
+    [33mdata-radix-collection-item[39m=[32m""[39m
+    [33mdata-state[39m=[32m"unchecked"[39m
+    [33mdir[39m=[32m"ltr"[39m
+    [33mrole[39m=[32m"option"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"2"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m/>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 cursor-pointer border bg-background shadow-xs not-disabled:hover:bg-accent not-disabled:hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:not-disabled:hover:bg-input/50 h-9 px-4 py-2 has-[>svg]:px-3"[39m
+      [33mdata-slot[39m=[32m"button"[39m
+    [36m>[39m
+      [0mActive[0m
+    [36m</button>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"@container border-t border-border bg-card px-3 py-2.5"[39m
+      [33mdata-testid[39m=[32m"payroll-finding-card-alert-b2039a08-c50f-473f-ac05-9134e47168fe"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex min-w-0 items-start gap-2"[39m
+      [36m>[39m
+        [36m<span[39m
+          [33mclass[39m=[32m"mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-warning-wash text-warning-strong"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"lucide lucide-triangle-alert size-3.5"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 9v4"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 17h.01"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+        [36m</span>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"min-w-0 flex-1 space-y-1"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-start gap-2"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flow-root min-w-0 flex-1 text-sm leading-5"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"float-end ms-2 inline-flex max-w-full flex-wrap items-center gap-1.5"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-neutral-wash text-neutral-strong hover:bg-neutral-wash/80 px-2 py-1 text-xs"[39m
+                [36m>[39m
+                  [0mAnomaly[0m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"inline-flex items-center rounded-full border font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-warning-wash text-warning-strong hover:bg-warning-wash/80 px-2 py-1 text-xs gap-1"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"size-1.5 rounded-full bg-warning"[39m
+                  [36m/>[39m
+                  [0mWarning[0m
+                [36m</div>[39m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-sm font-semibold break-words leading-5"[39m
+              [36m>[39m
+                [0mQA warning 1: gross pay of ₪750 exceeds the ₪500 review threshold.[0m
+              [36m</span>[39m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"shrink-0"[39m
+            [36m>[39m
+              [36m<button[39m
+                [33maria-controls[39m=[32m"radix-_r_3q_"[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-haspopup[39m=[32m"dialog"[39m
+                [33maria-label[39m=[32m"Actions"[39m
+                [33mclass[39m=[32m"inline-flex shrink-0 items-center justify-center whitespace-nowrap font-medium text-sm outline-none transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 cursor-pointer not-disabled:hover:bg-accent not-disabled:hover:text-accent-foreground dark:not-disabled:hover:bg-accent/50 gap-1.5 rounded-md has-[>svg]:px-2.5 size-7 p-0"[39m
+                [33mdata-slot[39m=[32m"button"[39m
+                [33mdata-state[39m=[32m"closed"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"lucide lucide-ellipsis size-4"[39m
+                  [33mfill[39m=[32m"none"[39m
+                  [33mheight[39m=[32m"24"[39m
+                  [33mstroke[39m=[32m"currentColor"[39m
+                  [33mstroke-linecap[39m=[32m"round"[39m
+                  [33mstroke-linejoin[39m=[32m"round"[39m
+                  [33mstroke-width[39m=[32m"2"[39m
+                  [33mviewBox[39m=[32m"0 0 24 24"[39m
+                  [33mwidth[39m=[32m"24"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+        ...
+      at getElementError (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/config.js:37:23)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:76:38)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:52:17)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/node_modules/@testing-library/dom/dist/query-helpers.js:95:19)
+      at <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:437:30)
+      at async <anonymous> (/Users/OmryN/payslick/app/wt/omry/alerts-924/tests/integration/payroll-finding-dismissal.test.tsx:439:11)
+(fail) payroll finding dismissal > saves Forever Alert type for the selected company [140.61ms]
+(pass) payroll finding dismissal > keeps a reason mandatory when dismissing without files [126.00ms]
+(pass) payroll finding dismissal > localizes the QA category in en instead of showing its internal check ID [96.47ms]
+(pass) payroll finding dismissal > localizes the QA category in he instead of showing its internal check ID [106.12ms]
+
+ 13 pass
+ 3 fail
+ 95 expect() calls
+Ran 16 tests across 1 file. [3.41s]

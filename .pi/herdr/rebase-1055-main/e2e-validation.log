@@ -1,0 +1,8 @@
+$ bunx playwright test "tests/e2e/alerts.test.ts" "tests/e2e/unified-payroll-findings.test.ts" "tests/e2e/field-link.test.ts"
+[dotenv@17.2.3] injecting env (17) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+Error: No dev server registered for cwd: /Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend
+Start one with: bun dev (or bun preview:watch)
+    at waitForPort (file:///Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/scripts/find-port.ts:73:11)
+    at file:///Users/OmryN/payslick/app/wt/omry/alerts-basic-frontend/playwright.config.ts:10:21
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+error: script "test:e2e" exited with code 1

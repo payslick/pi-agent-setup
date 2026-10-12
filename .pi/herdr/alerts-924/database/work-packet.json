@@ -1,0 +1,27 @@
+{
+  "taskId": "alerts-924-database",
+  "objective": "Implement physical persistence for main-owned logical schema storedFile.ts (alert entity and unique fileKey) and contracts.md evidence ownership/immutability, using a NEW additive migration, not rewriting old migrations. Reuse relevant prior evidence SQL removed by 6a7c214b9, adapt to existing alert_dismissal_attached_document (do not restore standalone alert attachment product). Preserve existing legacy employee/company attachments. Canonicalize duplicate file keys before unique constraint while preserving references. Generate Drizzle metadata through bun db:generate. Add focused migration tests for legacy upgrade, alert ownership and immutable links/documents including after undo.",
+  "writableFiles": [
+    "drizzle/0107_alert_dismissal_evidence.sql",
+    "drizzle/meta/0107_snapshot.json",
+    "drizzle/meta/_journal.json",
+    "tests/unit/db/alert-0107-evidence.test.ts"
+  ],
+  "contractFiles": [
+    ".pi/herdr/alerts-924/contracts.md",
+    "src/server/db/schema/storedFile.ts",
+    "src/server/db/schema/alerts.ts",
+    "tests/unit/api/alert-dismissal-contract.test.ts",
+    "tests/unit/db/alert-0101-migration.test.ts",
+    "tests/unit/db/alert-0101-upgrade.test.ts"
+  ],
+  "acceptanceCriteria": [
+    "New additive migration and snapshot match main logical schema; no rewriting old migrations",
+    "DB rejects foreign-company/foreign-alert evidence linkage, changes/removals of linked docs or links and aliased file-key attacks; legacy links preserved",
+    "Focused migration tests and existing migration upgrade tests pass; submit checkpoint and handoff"
+  ],
+  "nonGoals": ["No controller/UI/logical schema edits", "No old runner/evidence timeline tables"],
+  "validationPhase": "green",
+  "expectedFailingTests": [],
+  "frozenTestStructure": []
+}

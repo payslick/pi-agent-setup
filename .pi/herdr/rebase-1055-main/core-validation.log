@@ -1,0 +1,26 @@
+bun test v1.4.2 (744846f84)
+
+tests/unit/api/alerts.test.ts:
+(pass) returns ordered persisted notes only for their finding and authorized scope [151.72ms]
+(pass) listing payroll alerts > returns current findings with employee details and omits resolved findings [51.42ms]
+(pass) listing payroll alerts > lists only the selected company, employee and month [78.59ms]
+(pass) alert readiness > returns committed empty results after a draft mutation clears an old finding [82.54ms]
+(pass) alert readiness > awaits stalled pending work and returns the latest committed payload [1072.57ms]
+(pass) alert readiness > reads historical results without reevaluating or enqueueing work [58.35ms]
+(pass) alert tenant isolation > rejects another company's scope and alert IDs [57.14ms]
+(pass) alert tenant isolation > returns no alerts and rejects mutations without a selected scope [39.98ms]
+(pass) reviewing payroll alerts > records a note once and preserves its original text when retried [51.48ms]
+(pass) reviewing payroll alerts > rejects reusing a note key for another alert without annotating it [57.90ms]
+(pass) reviewing payroll alerts > rejects annotating another employee in an employee-selected scope [46.95ms]
+(pass) alert review permissions > lets a reader view findings but not annotate them [52.23ms]
+(pass) alert read authorization > denies the alert-only reader access to findings and readiness [49.24ms]
+(pass) alert read authorization > denies the employee-only reader access to findings and readiness [51.56ms]
+(pass) alert read authorization > allows a reader with both permissions without exposing review state [46.15ms]
+(pass) alert read authorization > returns no findings or readiness when no company or department is selected [69.00ms]
+(pass) alert read authorization > lists authorized department companies without including another department [77.99ms]
+(pass) alert read authorization > rejects a forged employee and company pairing [49.15ms]
+
+ 18 pass
+ 0 fail
+ 49 expect() calls
+Ran 18 tests across 1 file. [3.17s]

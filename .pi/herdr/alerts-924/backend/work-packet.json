@@ -1,0 +1,83 @@
+{
+  "taskId": "alerts-924-backend",
+  "objective": "Implement frozen #924 dismissal/evidence/selective-undo backend contract in .pi/herdr/alerts-924/contracts.md; reuse removed evidence implementation from parent of 6a7c214b9 and critical rules from 701a9d0c, adapt minimally. No wholesale cherry-pick. Main API contract suite must green. Update superseded existing API/service tests for required evidence and selected undo without deleting unrelated coverage.",
+  "writableFiles": [
+    "src/server/controllers/alerts.ts",
+    "src/server/controllers/alerts/queries.ts",
+    "src/server/controllers/alerts/access.ts",
+    "src/server/controllers/fileStorage.ts",
+    "src/server/api/routers/fileStorage.ts",
+    "src/server/api/routers/alerts.ts",
+    "src/server/services/alert-checks/alert-dismissals.ts",
+    "src/server/uploadthing/ownership.ts",
+    "src/server/uploadthing/core.ts",
+    "tests/unit/api/alerts.test.ts",
+    "tests/unit/api/fileStorage.test.ts",
+    "tests/unit/controllers/fileStorage.test.ts",
+    "tests/unit/controllers/fileStorage-alert-evidence.test.ts",
+    "tests/unit/services/alert-checks/dismissal.test.ts",
+    "tests/unit/api/alert-schemas.test.ts"
+  ],
+  "contractFiles": [
+    ".pi/herdr/alerts-924/contracts.md",
+    "src/server/api/schemas/alerts.ts",
+    "src/server/db/schema/storedFile.ts",
+    "src/lib/permissions.ts",
+    "tests/unit/api/alert-dismissal-contract.test.ts"
+  ],
+  "acceptanceCriteria": [
+    "All seven active API contract tests green; preserve target-company permission checks, immutable evidence, real uploads/receipt validation, selective undo and critical immunity",
+    "Compact typed implementation reusing existing services and storage; no any, no test bypasses",
+    "Update superseded existing tests to new contract; focused tests pass; checkpoint and valid handoff required"
+  ],
+  "nonGoals": [
+    "No UI edits, schema edits, migrations, Frozen lifecycle or runner work",
+    "Do not edit frozen main tests/contracts; ask main for contract deviations"
+  ],
+  "validationPhase": "green",
+  "expectedFailingTests": [
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "requires a reason and document without changing the finding",
+      "expectedReason": "Projection lacks permissions",
+      "outputPattern": "Output validation failed"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "persists documents and policy once and keeps evidence immutable after undo",
+      "expectedReason": "Alert-owned evidence unsupported",
+      "outputPattern": "AlertsPage.errors.attachedDocumentNotFound"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "undoes only the selected overlap and preserves the other decision on retries",
+      "expectedReason": "Undo removes both overlaps",
+      "outputPattern": "Received  + 1"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "rejects critical dismissal and ignores stored critical decisions in lists and counts",
+      "expectedReason": "Missing critical rejection",
+      "outputPattern": "[NotFound: AlertsPage.errors.attachedDocumentNotFound]"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "rejects another uploader or alert's staged evidence",
+      "expectedReason": "Legacy employee document accepted",
+      "outputPattern": "Expected promise that rejects"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "registers a signed upload idempotently and rejects unsigned or cross-alert reuse",
+      "expectedReason": "Alert upload permissions not mapped",
+      "outputPattern": "Common.errors.insufficientPermissions"
+    },
+    {
+      "path": "tests/unit/api/alert-dismissal-contract.test.ts",
+      "title": "keeps lower-severity findings from being promoted by an older visibility override",
+      "expectedReason": "Projection unsupported; severity override also promotes info",
+      "outputPattern": "Output validation failed"
+    }
+  ],
+  "frozenTestStructure": []
+}
