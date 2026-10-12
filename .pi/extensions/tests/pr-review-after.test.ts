@@ -97,7 +97,7 @@ describe("pr review after", () => {
     const improvements = inferLaneImprovementsFromPolicyHints(hints);
     const laneIds = improvements.map((item) => item.laneId);
 
-    expect(laneIds).toContain("security-api");
+    expect(laneIds).toContain("api-safety");
     expect(laneIds).toContain("tests");
     expect(laneIds).toContain("data");
   });
@@ -118,7 +118,7 @@ describe("pr review after", () => {
       afterAnalysis({
         laneImprovements: [
           {
-            laneId: "security-api",
+            laneId: "api-safety",
             proposedImprovement: "Check validation error payloads for raw ID exposure.",
             rationale: "Reviewer flagged raw IDs.",
             affectedCommentIds: ["c1"],
@@ -176,7 +176,7 @@ describe("pr review after", () => {
       analyses: comments.map((comment) => ({
         commentId: comment.id,
         priority: "action_required",
-        theme: comment.id === "c3" ? "Data and types" : "Security/API safety",
+        theme: comment.id === "c3" ? "Data and types" : "API safety",
         summary: comment.body,
         confidence: 0.9,
       })),
@@ -203,7 +203,7 @@ describe("pr review after", () => {
       afterAnalysis({
         laneImprovements: [
           {
-            laneId: "security-api",
+            laneId: "api-safety",
             proposedImprovement: "Check validation error payloads for raw ID exposure.",
             rationale: "Reviewer flagged raw IDs.",
             affectedCommentIds: ["c1"],
@@ -222,7 +222,7 @@ describe("pr review after", () => {
       }),
     );
 
-    expect(lanePrompt).toContain("security-api");
+    expect(lanePrompt).toContain("api-safety");
     expect(lanePrompt).toContain("regression-guards");
 
     const rulePrompt = buildReviewAfterNextActionPrompt(

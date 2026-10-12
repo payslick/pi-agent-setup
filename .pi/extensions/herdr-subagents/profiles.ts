@@ -21,6 +21,8 @@ const IMPLEMENTATION_TOOLS = [
   "multi-edit",
   "write",
   "ask_main_agent",
+  "submit_checkpoint",
+  "submit_handoff",
 ];
 const FRONTEND_TOOLS = [
   "read",
@@ -37,6 +39,8 @@ const FRONTEND_TOOLS = [
   "debug_ui_server_logs",
   "take_screenshot",
   "ask_main_agent",
+  "submit_checkpoint",
+  "submit_handoff",
 ];
 const REVIEW_TOOLS = [
   "read",
@@ -45,17 +49,29 @@ const REVIEW_TOOLS = [
   "project_index_impact",
   "bash",
   "ask_main_agent",
+  "submit_checkpoint",
+  "submit_handoff",
 ];
-const EXCLUDED_COORDINATION_TOOLS = ["spawn_subagents", "manage_subagents"];
+const EXCLUDED_COORDINATION_TOOLS = ["herdr_spawn_agents", "herdr_manage_agents"];
 
 const readProfilePrompt = (filename: string) =>
   readFileSync(new URL(`../../agents/${filename}`, import.meta.url), "utf8").trim();
 
-const FRONTEND_PROMPT = readProfilePrompt("frontend-implementer.md");
-const BACKEND_PROMPT = readProfilePrompt("backend-implementer.md");
-const UNIT_TEST_PROMPT = readProfilePrompt("unit-test-implementer.md");
-const E2E_TEST_PROMPT = readProfilePrompt("e2e-test-implementer.md");
-const REVIEW_PROMPT = readProfilePrompt("test-reviewer.md");
+const TEST_POLICY = readFileSync(
+  new URL("../../skills/testing/policy.md", import.meta.url),
+  "utf8",
+).trim();
+const SHARED_HANDOFF_PROMPT = readProfilePrompt("shared-handoff.md");
+const promptWithSharedPolicy = (prompt: string) =>
+  [prompt, SHARED_HANDOFF_PROMPT, TEST_POLICY].join("\n\n");
+
+const FRONTEND_PROMPT = promptWithSharedPolicy(readProfilePrompt("frontend-implementer.md"));
+const BACKEND_PROMPT = promptWithSharedPolicy(readProfilePrompt("backend-implementer.md"));
+const DATABASE_PROMPT = promptWithSharedPolicy(readProfilePrompt("database-implementer.md"));
+const BUILDER_PROMPT = promptWithSharedPolicy(readProfilePrompt("builder-implementer.md"));
+const UNIT_TEST_PROMPT = promptWithSharedPolicy(readProfilePrompt("unit-test-implementer.md"));
+const E2E_TEST_PROMPT = promptWithSharedPolicy(readProfilePrompt("e2e-test-implementer.md"));
+const REVIEW_PROMPT = promptWithSharedPolicy(readProfilePrompt("test-reviewer.md"));
 
 export const SUBAGENT_PROFILES = {
   "frontend-implementer": {
@@ -75,6 +91,20 @@ export const SUBAGENT_PROFILES = {
     skills: [".pi/skills/code-index/SKILL.md", ".pi/skills/testing/SKILL.md"],
     noPromptTemplates: true,
     systemPrompt: BACKEND_PROMPT,
+  },
+  "database-implementer": {
+    tools: IMPLEMENTATION_TOOLS,
+    excludeTools: EXCLUDED_COORDINATION_TOOLS,
+    skills: [".pi/skills/code-index/SKILL.md", ".pi/skills/testing/SKILL.md"],
+    noPromptTemplates: true,
+    systemPrompt: DATABASE_PROMPT,
+  },
+  "builder-implementer": {
+    tools: IMPLEMENTATION_TOOLS,
+    excludeTools: EXCLUDED_COORDINATION_TOOLS,
+    skills: [".pi/skills/code-index/SKILL.md", ".pi/skills/testing/SKILL.md"],
+    noPromptTemplates: true,
+    systemPrompt: BUILDER_PROMPT,
   },
   "unit-test-implementer": {
     tools: IMPLEMENTATION_TOOLS,
@@ -126,14 +156,35 @@ const definedSpecValues = (spec: SubagentSpec): SubagentSpec =>
     Object.entries(spec).filter(([, value]) => value !== undefined),
   ) as SubagentSpec;
 
+const formatExpectedFailures = (packet: SubagentWorkPacket): string =>
+  formatList(
+    packet.expectedFailingTests?.map(
+      (test) =>
+        `${test.path} :: ${test.title} — ${test.expectedReason}${test.outputPattern ? ` [output: ${test.outputPattern}]` : ""}`,
+    ),
+    "none",
+  );
+
+const formatFrozenTestStructure = (packet: SubagentWorkPacket): string =>
+  formatList(
+    packet.frozenTestStructure?.map(
+      (structure) => `${structure.path}: ${structure.orderedTitles.join(" → ")}`,
+    ),
+    "none",
+  );
+
 export const formatWorkPacket = (packet: SubagentWorkPacket, parentSessionId?: string): string =>
   [
     parentSessionId ? `Work packet [spawned by ${parentSessionId}]` : "Work packet",
+    `Logical task: ${packet.taskId ?? "assigned at launch"}`,
     `Objective:\n${packet.objective}`,
     `Writable files:\n${formatList(packet.writableFiles, "none; this is read-only work")}`,
-    `Contract files (main-owned, read-only):\n${formatList(packet.contractFiles, "none")}`,
+    `Contract files (architect-owned, read-only):\n${formatList(packet.contractFiles, "none")}`,
     `Acceptance criteria:\n${formatList(packet.acceptanceCriteria, "none")}`,
     `Non-goals:\n${formatList(packet.nonGoals, "none")}`,
+    `Validation phase: ${packet.validationPhase ?? "green"}`,
+    `Expected red failures:\n${formatExpectedFailures(packet)}`,
+    `Frozen test structure:\n${formatFrozenTestStructure(packet)}`,
   ].join("\n\n");
 
 export const resolveSubagentSpec = (

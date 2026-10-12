@@ -21,9 +21,7 @@ const pr: PRMetadata = {
   state: "open",
   base: { ref: "main", sha: "base" },
   head: { ref: "feature/invoice-export", sha: "head" },
-  commits: [
-    { sha: "abc123", title: "Add invoice export", body: "Include finance CSV fields." },
-  ],
+  commits: [{ sha: "abc123", title: "Add invoice export", body: "Include finance CSV fields." }],
 };
 
 const packet: ReviewLanePacket = {
@@ -45,6 +43,13 @@ describe("pr review lanes", () => {
       expect(prompt).toContain("### Do not report");
     }
     expect(readReviewLanePrompt("tests")).toContain("## Tests lane");
+    expect(readReviewLanePrompt("tests")).toContain("# Shared test quality policy");
+    expect(readReviewLanePrompt("tests")).toContain(
+      "Contract tests are never skipped or marked todo",
+    );
+    expect(readReviewLanePrompt("tests")).toContain(
+      "Builder unit tests may inspect the database directly",
+    );
   });
 
   test("rejects lanes without a Markdown prompt", () => {
@@ -58,7 +63,9 @@ describe("pr review lanes", () => {
     const metadataLane = lanes.find((lane) => lane.laneId === "pr-metadata");
 
     expect(metadataLane).toBeDefined();
-    expect(metadataLane?.focus).toContain("Load and follow the explicitly configured `pr-metadata` skill");
+    expect(metadataLane?.focus).toContain(
+      "Load and follow the explicitly configured `pr-metadata` skill",
+    );
     const prompt = buildLaneReviewPrompt(pr, metadataLane!, {
       sharedDir: "tmp/session/shared",
       laneDir: "tmp/session/pr-metadata",
@@ -83,13 +90,14 @@ describe("pr review lanes", () => {
     expect(relevanceLane?.focus).toContain("behavior-preserving refactor");
     expect(relevanceLane?.focus).toContain("smallest plausible implementation");
     expect(relevanceLane?.focus).toContain("does not by itself prove that the scope is necessary");
-    expect(relevanceLane?.focus).toContain("inspect the lane's `hunks.json`");
+    expect(relevanceLane?.focus).toContain("Read every range in the complete change index");
     expect(relevanceLane?.focus).toContain("runtime behavior change is not required");
   });
 
-  test("allows relevance to inspect omitted or truncated hunks", () => {
+  test("requires relevance to inspect every indexed change", () => {
+    expect(readSharedReviewLanePrompt()).toContain("relevance must inspect every indexed change");
     expect(readSharedReviewLanePrompt()).toContain(
-      "unless the assigned lane is relevance and its required material-scope audit needs omitted or truncated hunks",
+      "This initial diff read does not require a candidate finding",
     );
   });
 
@@ -123,10 +131,12 @@ describe("pr review lanes", () => {
     const lanes = routeReviewLanes({ pr, files, hunks });
 
     expect(lanes.length).toBeGreaterThan(0);
-    expect(lanes.every((lane) => lane.files.every((file) => !file.path.startsWith("drizzle/"))))
-      .toBeTrue();
-    expect(lanes.every((lane) => lane.hunks.every((hunk) => !hunk.filePath.startsWith("drizzle/"))))
-      .toBeTrue();
+    expect(
+      lanes.every((lane) => lane.files.every((file) => !file.path.startsWith("drizzle/"))),
+    ).toBeTrue();
+    expect(
+      lanes.every((lane) => lane.hunks.every((hunk) => !hunk.filePath.startsWith("drizzle/"))),
+    ).toBeTrue();
     expect(
       filterReviewPatch(
         "diff --git a/drizzle/0099_generated.sql b/drizzle/0099_generated.sql\n+sql\n" +
@@ -158,8 +168,10 @@ describe("pr review lanes", () => {
     });
 
     expect(prompt).toContain("Live partial findings: tmp/session/relevance/partial-findings.jsonl");
-    expect(prompt).toContain("Artifact paths are references, not a reading checklist");
-    expect(prompt).toContain("unless a specific truncated hunk requires omitted context");
+    expect(prompt).toContain(
+      "Use the complete change index below to read the relevant diff ranges",
+    );
+    expect(prompt).toContain("Other artifact paths provide supporting metadata");
     expect(prompt).not.toContain("Read shared data before using tools");
     expect(prompt).toContain("Use `read-many-files-lines` for bounded file-content retrieval");
     expect(prompt).toContain("request only the minimum necessary line ranges");

@@ -1,15 +1,45 @@
 {
   "version": 1,
   "skills": {
+    "code-index": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "a75ebd4ef6707a5a7782d1ea2d44b4b260f84ba648333a7380452ff1d072e1b6"
+    },
+    "debug-ui": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "79e1e4e9abea59419d4193a3154ce4eddd1e33e38b9220fe3ec10a7d67aee777"
+    },
     "feature": {
       "source": "../skills",
       "sourceType": "local",
-      "computedHash": "5c457bc58cd31984ef23e1226bb5b101bbae699db4ffd9d8258c28841fa6a31a"
+      "computedHash": "5460d999529eb8b0585414ad7fab1f242a5c36b0aaaf58dc4f4ac6e5b9abae32"
+    },
+    "navigation": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "d2572d54f5b33c7ffb3f6eb5ef4ebb53e92038e7d90a83c809f46cd3799a92b4"
+    },
+    "payslick-scripts": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "20793738c5cdbc84ab4e1631eeaa89072bac73cc97932d9d700dc9c41fa2d3d2"
+    },
+    "playwright-guide": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "2a039914b6815317928f191bdf810330a425e4ecc1d97a1cb3762637826aef4f"
+    },
+    "post-review": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "deebfeb675d5ad168a19c6c31e7a3188f14efad273afd19095f4d7e2072e9e2d"
     },
     "pr": {
       "source": "../skills",
       "sourceType": "local",
-      "computedHash": "170320ff009aad96275ff4ee79dcab4e8dce9e64d9fa407f140eb4eaca03eef2"
+      "computedHash": "f88f3a56b59ae40ebd50958aef3b97a35cb26463fafe9950fe0d91aa12de4a32"
     },
     "pr-metadata": {
       "source": "../skills",
@@ -19,12 +49,27 @@
     "pr-update": {
       "source": "../skills",
       "sourceType": "local",
-      "computedHash": "2b890b5bf789085ea25a6717b5b4a233c046bd9f1551cf018db6b52386c52163"
+      "computedHash": "59a7fd89989850340f92d01464232ca1ecb81f0dd13ba9735c484ee6bcaead1d"
     },
     "review": {
       "source": "../skills",
       "sourceType": "local",
-      "computedHash": "d2889b98cfa2516c1a8b0d134d020b35fb7a5faa3f759edffd083dc8f7ae6b64"
+      "computedHash": "3d61895ae8d340456fef5035c827d925a3bf95f0736f414da4ee354f0927636c"
+    },
+    "screenshot": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "a1a6b45cd479e55bdd8e6f116de8682365428acf435cf0eedf38984676e34dca"
+    },
+    "upgrade-deps": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "8b3d764167054ed12404dae2bbf339d36a9232c01bc61059938e45b103708820"
+    },
+    "visual-fix": {
+      "source": "../skills",
+      "sourceType": "local",
+      "computedHash": "3f80085f385214a914d2d467073ec8cca4838035b753d2322b57bee20a1634e0"
     }
   }
 }

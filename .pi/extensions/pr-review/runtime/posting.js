@@ -1,6 +1,6 @@
 const DEFAULT_MODEL_NAME = "gpt-5.6-sol";
 const REVIEW_TYPE_BY_LANE = {
-  "security-api": "security",
+  "api-safety": "api-safety",
   tests: "testing",
   "code-quality": "quality",
 };

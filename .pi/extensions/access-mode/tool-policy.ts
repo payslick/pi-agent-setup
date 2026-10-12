@@ -24,15 +24,23 @@ export const DIRECT_READ_TOOL_NAMES = new Set([
 const GET_DATA_CHILD_ENV = "PI_GET_DATA_CHILD";
 const MODE_THREE_DELEGATED_READ_TOOL_NAMES = new Set(["read"]);
 
-export const WRITE_TOOL_NAMES = new Set(["edit", "write", "multi-edit", "project_index_refresh"]);
+export const WRITE_TOOL_NAMES = new Set([
+  "edit",
+  "write",
+  "multi-edit",
+  "project_index_refresh",
+  "submit_checkpoint",
+  "submit_handoff",
+]);
 
 export const EXECUTE_TOOL_NAMES = new Set([
   "debug_ui_start",
   "debug_ui_run",
   "debug_ui_close",
   "take_screenshot",
-  "spawn_subagents",
-  "manage_subagents",
+  "upload_screenshot",
+  "herdr_spawn_agents",
+  "herdr_manage_agents",
 ]);
 
 export function toolCapability(toolName: string): ToolCapability {
@@ -47,8 +55,14 @@ export function isBashActionAllowed(action: unknown, mode: AccessMode = getAcces
   return action === "read" || (action === "write" && mode >= 2);
 }
 
-export function isToolAllowed(toolName: string, mode: AccessMode = getAccessMode()): boolean {
+export function isToolAllowed(
+  toolName: string,
+  mode: AccessMode = getAccessMode(),
+  isSubagent = Boolean(process.env.PI_SUBAGENT_ID),
+): boolean {
+  if (isSubagent && ["herdr_spawn_agents", "herdr_manage_agents"].includes(toolName)) return false;
   if (mode === 4) return true;
+  if (toolName === "write") return false;
   if (
     mode === 3 &&
     process.env[GET_DATA_CHILD_ENV] !== "1" &&

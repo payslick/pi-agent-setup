@@ -20,7 +20,6 @@ import multiEdit, {
   renderLineCounts,
   renderMultiEditInput,
   visibleBlockLines,
-  type MultiEditInput,
 } from "../multi-edit";
 import {
   POST_EDIT_VALIDATION_REQUEST_EVENT,
@@ -111,28 +110,31 @@ afterEach(async () => {
   temporaryPaths.clear();
 });
 
+async function setupEditFile(content: string) {
+  const root = await mkdtemp(path.join(tmpdir(), "multi-edit-lines-"));
+  temporaryPaths.add(root);
+  await writeFile(path.join(root, "example.txt"), content, "utf8");
+  const { tool } = registerMultiEdit();
+  return {
+    root,
+    execute: (input: Record<string, unknown>) =>
+      tool.execute("line-edit", input, undefined, undefined, { cwd: root } as ExtensionContext),
+    read: () => readFile(path.join(root, "example.txt"), "utf8"),
+  };
+}
+
 describe("multi-edit presentation", () => {
-  test("shows the first two removed and added lines when collapsed", () => {
+  test("previews the selected range and first two replacement lines when collapsed", () => {
     initTheme("dark");
-    const input: MultiEditInput = {
-      files: [
-        {
-          path: "src/example.ts",
-          edits: [
-            {
-              oldText: "const oldOne = 1;\nconst oldTwo = 2;\nconst oldThree = 3;",
-              newText: "const newOne = 1;\nconst newTwo = 2;\nconst newThree = 3;",
-            },
-          ],
-        },
-      ],
+    const input = {
+      "src/example.ts:4-6": "const newOne = 1;\nconst newTwo = 2;\nconst newThree = 3;",
     };
 
     const collapsedWithHighlighting = renderMultiEditInput(input, false, renderTheme);
-    const highlightedBeforeLine =
-      collapsedWithHighlighting.split("\n").find((line) => line.includes("oldOne")) ?? "";
+    const highlightedLine =
+      collapsedWithHighlighting.split("\n").find((line) => line.includes("newOne")) ?? "";
     const ansiEscape = String.fromCharCode(27);
-    const syntaxColors = highlightedBeforeLine
+    const syntaxColors = highlightedLine
       .split(`${ansiEscape}[`)
       .slice(1)
       .map((sequence) => sequence.split("m", 1)[0])
@@ -140,54 +142,41 @@ describe("multi-edit presentation", () => {
     expect(new Set(syntaxColors).size).toBeGreaterThan(1);
 
     const collapsed = Bun.stripANSI(collapsedWithHighlighting);
-    expect(collapsed).toContain("const oldOne = 1;");
-    expect(collapsed).toContain("const oldTwo = 2;");
-    expect(collapsed).not.toContain("const oldThree = 3;");
+    expect(collapsed).toContain("lines 4–6");
     expect(collapsed).toContain("const newOne = 1;");
     expect(collapsed).toContain("const newTwo = 2;");
     expect(collapsed).not.toContain("const newThree = 3;");
-    expect(collapsed).toContain("… 2 more lines");
-    expect(collapsed).toContain("[toolErrorBg] const oldOne = 1; [/toolErrorBg]");
+    expect(collapsed).toContain("… 1 more line");
     expect(collapsed).toContain("[toolSuccessBg] const newOne = 1; [/toolSuccessBg]");
     expect(collapsed).not.toContain("before");
     expect(collapsed).not.toContain("after");
 
     const expanded = Bun.stripANSI(renderMultiEditInput(input, true, renderTheme));
-    expect(expanded).toContain("const oldThree = 3;");
     expect(expanded).toContain("const newThree = 3;");
     expect(expanded).not.toContain("more line");
   });
 
-  test("shows source line ranges and drops unchanged replacement context", () => {
+  test("distinguishes deletion and creation previews", () => {
     initTheme("dark");
     const rendered = Bun.stripANSI(
       renderMultiEditInput(
         {
-          files: [
-            {
-              path: "src/example.ts",
-              edits: [
-                {
-                  oldText: "const same = 1;\nconst value = OLD;\nconst tail = 3;",
-                  newText: "const same = 1;\nconst value = NEW;\nconst tail = 3;",
-                },
-              ],
-            },
-          ],
+          "src/example.ts:8-10": "",
+          "src/new.ts": "export const value = 1;\n",
+          "src/tail.ts:4-": "replacement tail",
         },
         false,
         renderTheme,
-        80,
-        [{ path: "src/example.ts", ranges: [{ startLine: 8, endLine: 10 }] }],
       ),
     );
 
     expect(rendered).toContain("lines 8–10");
-    expect(rendered).toContain("const value = OLD;");
-    expect(rendered).toContain("const value = NEW;");
-    expect(rendered).not.toContain("const same = 1;");
-    expect(rendered).not.toContain("const tail = 3;");
-    expect(rendered).not.toContain("block");
+    expect(rendered).toContain("(delete lines)");
+    expect(rendered).toContain("src/new.ts");
+    expect(rendered).toContain("create");
+    expect(rendered).toContain("export const value = 1;");
+    expect(rendered).toContain("lines 4–EOF");
+    expect(rendered).toContain("replacement tail");
   });
 
   test("windows collapsed diffs around changes at the end of long lines", () => {
@@ -217,9 +206,11 @@ describe("multi-edit presentation", () => {
     const incompleteInputs: unknown[] = [
       undefined,
       {},
-      { files: null },
-      { files: [null, {}] },
-      { files: [{ path: "src/example.ts" }] },
+      { "src/example.ts:4-": null },
+      { "src/example.ts:": "" },
+      { "src/example.ts:4": "" },
+      { "src/new.ts": "export const" },
+      { "same.ts": "", "same.ts:1-": "edited" },
     ];
 
     for (const input of incompleteInputs) {
@@ -227,21 +218,10 @@ describe("multi-edit presentation", () => {
     }
 
     const partialEdit = Bun.stripANSI(
-      renderMultiEditInput(
-        {
-          files: [
-            {
-              path: "src/example.ts",
-              edits: [{ oldText: "const before = true;" }],
-            },
-          ],
-        },
-        false,
-        renderTheme,
-      ),
+      renderMultiEditInput({ "src/example.ts:4-": "const value = true;" }, false, renderTheme),
     );
     expect(partialEdit).toContain("src/example.ts");
-    expect(partialEdit).toContain("const before = true;");
+    expect(partialEdit).toContain("const value = true;");
   });
 
   test("truncates long collapsed lines and preserves indentation when expanded", () => {
@@ -281,6 +261,203 @@ describe("multi-edit presentation", () => {
       lines: ["one", "two"],
       omittedLines: 1,
     });
+  });
+});
+
+describe("multi-edit line ranges", () => {
+  test("replaces only the requested occurrence using inclusive original line numbers", async () => {
+    const file = await setupEditFile("same\nsame\ntail\nlast\n");
+    await file.execute({
+      "example.txt:2-2": "second\nextra",
+      "example.txt:3-4": "end\n",
+    });
+    expect(await file.read()).toBe("same\nsecond\nextra\nend\n");
+  });
+
+  test.each([
+    ["terminated line", "first\nlast\n", "changed", "first\nchanged\n"],
+    ["unterminated line", "first\nlast", "changed", "first\nchanged"],
+    ["explicit terminator", "first\nlast\n", "changed\n", "first\nchanged\n"],
+    ["CRLF", "first\r\nlast\r\n", "changed\nextra", "first\r\nchanged\r\nextra\r\n"],
+    ["delete", "first\nlast\n", "", "first\n"],
+    ["blank line", "first\nlast\n", "\n", "first\n\n"],
+  ])("preserves whole-line boundaries for %s", async (_scenario, original, newText, expected) => {
+    const file = await setupEditFile(original);
+    await file.execute({ "example.txt:2-2": newText });
+    expect(await file.read()).toBe(expected);
+  });
+
+  test("deletes a middle range without joining adjacent lines", async () => {
+    const file = await setupEditFile("keep\nremove\nremove\ntail");
+    await file.execute({ "example.txt:2-3": "" });
+    expect(await file.read()).toBe("keep\ntail");
+  });
+
+  test.each([
+    [0, 1],
+    [2, 1],
+    [1, 3],
+    [1.5, 2],
+    [1, 1.5],
+  ])("rejects invalid range %s–%s without modifying the file", async (startLine, endLine) => {
+    const file = await setupEditFile("one\ntwo\n");
+    await expect(
+      file.execute({ [`example.txt:${startLine}-${endLine}`]: "wrong" }),
+    ).rejects.toThrow("Invalid line range");
+    expect(await file.read()).toBe("one\ntwo\n");
+  });
+
+  test("rejects overlapping ranges across repeated paths without modifying the file", async () => {
+    const file = await setupEditFile("one\ntwo\nthree\n");
+    await expect(
+      file.execute({ "example.txt:1-2": "first", "example.txt:2-3": "second" }),
+    ).rejects.toThrow("Overlapping edits");
+    expect(await file.read()).toBe("one\ntwo\nthree\n");
+  });
+
+  test("rejects the nested input format without modifying the file", async () => {
+    const file = await setupEditFile("one\n");
+    await expect(
+      file.execute({
+        files: [{ path: "example.txt", edits: [{ startLine: 1, endLine: 1, newText: "wrong" }] }],
+      }),
+    ).rejects.toThrow("multi-edit expects a non-empty map of file keys to strings");
+    expect(await file.read()).toBe("one\n");
+  });
+
+  test.each([
+    ["terminated", "one\ntwo\nthree\n", "tail", "first\nextra\ntail\n"],
+    ["unterminated", "one\ntwo\nthree", "tail", "first\nextra\ntail"],
+    ["deletion", "one\ntwo\nthree\n", "", "first\nextra\n"],
+  ])(
+    "replaces through original EOF for %s content",
+    async (_scenario, original, tail, expected) => {
+      const file = await setupEditFile(original);
+      const result = await file.execute({
+        "example.txt:1-1": "first\nextra",
+        "example.txt:2-": tail,
+      });
+      expect(await file.read()).toBe(expected);
+      expect(result.details).toMatchObject({
+        editRanges: [
+          {
+            path: "example.txt",
+            ranges: [
+              { startLine: 1, endLine: 1 },
+              { startLine: 2, endLine: 3 },
+            ],
+          },
+        ],
+      });
+    },
+  );
+
+  test("rejects an open-ended range starting beyond EOF", async () => {
+    const file = await setupEditFile("one\ntwo\n");
+    await expect(file.execute({ "example.txt:3-": "wrong" })).rejects.toThrow("Invalid line range");
+    expect(await file.read()).toBe("one\ntwo\n");
+  });
+
+  test("rejects overlapping open-ended ranges without modifying the file", async () => {
+    const file = await setupEditFile("one\ntwo\nthree\n");
+    await expect(
+      file.execute({ "example.txt:2-": "tail", "example.txt:3-3": "last" }),
+    ).rejects.toThrow("Overlapping edits");
+    expect(await file.read()).toBe("one\ntwo\nthree\n");
+  });
+
+  test("parses the range after the last colon in a file path", async () => {
+    const file = await setupEditFile("");
+    const filePath = path.join(file.root, "notes:2026.txt");
+    await writeFile(filePath, "first\nlast\n", "utf8");
+    await file.execute({ "notes:2026.txt:2-": "tail" });
+    expect(await readFile(filePath, "utf8")).toBe("first\ntail\n");
+  });
+
+  test.each(["example.txt:", "example.txt:1", "example.txt:1-x", "example.txt:-1-2", ":1-2"])(
+    "rejects malformed key %s instead of creating a file",
+    async (key) => {
+      const file = await setupEditFile("one\n");
+      await expect(file.execute({ [key]: "wrong" })).rejects.toThrow("Invalid multi-edit key");
+      await expect(readFile(path.join(file.root, key), "utf8")).rejects.toThrow("ENOENT");
+      expect(await file.read()).toBe("one\n");
+    },
+  );
+
+  test("reports no changes when the replacement preserves the selected lines", async () => {
+    const file = await setupEditFile("one\ntwo\n");
+    const result = await file.execute({ "example.txt:2-2": "two" });
+    expect(await file.read()).toBe("one\ntwo\n");
+    expect(result.content).toEqual([{ type: "text", text: "No changes." }]);
+    expect(result.details).toMatchObject({ changedFiles: [], diffs: [], lineCounts: [] });
+  });
+});
+
+describe("multi-edit creation", () => {
+  test("creates parent directories and new files alongside filling an empty file", async () => {
+    const file = await setupEditFile("");
+    const result = await file.execute({
+      "nested/new.txt": "new\ncontent\n",
+      "example.txt": "filled\n",
+      "empty.txt": "",
+    });
+    expect(await readFile(path.join(file.root, "nested/new.txt"), "utf8")).toBe("new\ncontent\n");
+    expect(await file.read()).toBe("filled\n");
+    expect(await readFile(path.join(file.root, "empty.txt"), "utf8")).toBe("");
+    expect(result.details).toMatchObject({
+      changedFiles: ["nested/new.txt", "example.txt", "empty.txt"],
+      lineCounts: [
+        { path: "nested/new.txt", addedLines: 2, removedLines: 0 },
+        { path: "example.txt", addedLines: 1, removedLines: 0 },
+        { path: "empty.txt", addedLines: 0, removedLines: 0 },
+      ],
+      editRanges: [
+        { path: "nested/new.txt", ranges: [{ startLine: 1, endLine: 2 }] },
+        { path: "example.txt", ranges: [{ startLine: 1, endLine: 1 }] },
+        { path: "empty.txt", ranges: [] },
+      ],
+    });
+  });
+
+  test.each(["existing\n", " \n"])("rejects create on non-empty content %j", async (content) => {
+    const file = await setupEditFile(content);
+    await expect(file.execute({ "example.txt": "replacement" })).rejects.toThrow(
+      "Cannot create non-empty file",
+    );
+    expect(await file.read()).toBe(content);
+  });
+
+  test("rejects mixing creation and edits for the same path", async () => {
+    const file = await setupEditFile("");
+    for (const input of [
+      { "example.txt": "created", "example.txt:1-1": "edited" },
+      { "example.txt:1-": "edited", "example.txt": "created" },
+    ]) {
+      await expect(file.execute(input)).rejects.toThrow("Cannot combine create");
+      expect(await file.read()).toBe("");
+    }
+  });
+
+  test("requires create for empty files and rejects normal edits on missing files", async () => {
+    const file = await setupEditFile("");
+    await expect(file.execute({ "example.txt:1-1": "wrong" })).rejects.toThrow(
+      "Invalid line range",
+    );
+    await expect(file.execute({ "missing.txt:1-1": "wrong" })).rejects.toThrow("ENOENT");
+    expect(await file.read()).toBe("");
+  });
+
+  test("enforces access mode and project boundaries for creation", async () => {
+    const file = await setupEditFile("");
+    const outside = await mkdtemp(path.join(tmpdir(), "multi-edit-create-outside-"));
+    temporaryPaths.add(outside);
+    await symlink(outside, path.join(file.root, "escape"));
+    setAccessMode(1);
+    await expect(file.execute({ "example.txt": "blocked" })).rejects.toThrow("blocks multi-edit");
+    setAccessMode(3);
+    await expect(file.execute({ "escape/new.txt": "blocked" })).rejects.toThrow(PROJECT_PATH_ERROR);
+    await expect(readFile(path.join(outside, "new.txt"), "utf8")).rejects.toThrow("ENOENT");
+    expect(await file.read()).toBe("");
   });
 });
 
@@ -361,13 +538,9 @@ describe("multi-edit tool", () => {
     await symlink(outsideFile, path.join(root, "escape.txt"));
     const { tool } = registerMultiEdit();
     const editFile = async (filePath: string) =>
-      tool.execute(
-        `path-${filePath}`,
-        { files: [{ path: filePath, edits: [{ oldText: "before", newText: "after" }] }] },
-        undefined,
-        undefined,
-        { cwd: root } as ExtensionContext,
-      );
+      tool.execute(`path-${filePath}`, { [`${filePath}:1-1`]: "after" }, undefined, undefined, {
+        cwd: root,
+      } as ExtensionContext);
 
     setAccessMode(1);
     await expect(editFile("escape.txt")).rejects.toThrow("blocks multi-edit");
@@ -401,32 +574,24 @@ describe("multi-edit tool", () => {
     });
     const { tool } = registerMultiEdit((request) => {
       expect(request.affectedPaths).toEqual(["example.ts"]);
+      expect(request.editRanges).toEqual([
+        { path: "example.ts", ranges: [{ startLine: 1, endLine: 1 }] },
+      ]);
       request.waitFor(validation);
       notifyValidationRequested();
     });
 
     let settled = false;
     const execution = Promise.resolve(
-      tool.execute(
-        "call-await",
-        {
-          files: [
-            {
-              path: "example.ts",
-              edits: [{ oldText: "before", newText: "after" }],
-            },
-          ],
-        },
-        undefined,
-        undefined,
-        { cwd: root } as ExtensionContext,
-      ),
+      tool.execute("call-await", { "example.ts:1-": "after" }, undefined, undefined, {
+        cwd: root,
+      } as ExtensionContext),
     ).then((result) => {
       settled = true;
       return result;
     });
 
-    await validationRequested;
+    await Promise.race([validationRequested, execution]);
     expect(await readFile(path.join(root, "example.ts"), "utf8")).toBe("after\n");
     expect(settled).toBeFalse();
 
@@ -449,14 +614,7 @@ describe("multi-edit tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      {
-        files: [
-          {
-            path: "src/example.ts",
-            edits: [{ oldText: "two", newText: "three\nfour" }],
-          },
-        ],
-      },
+      { "src/example.ts:2-2": "three\nfour" },
       undefined,
       undefined,
       { cwd: root } as ExtensionContext,

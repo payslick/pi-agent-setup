@@ -36,11 +36,17 @@ describe("PR review lane prompts and tool policy", () => {
     expect(testsPrompt).toContain("plausible production regression");
     expect(testsPrompt).toContain("exact existing utility");
     expect(testsPrompt).toContain("database as a black box");
-    expect(testsPrompt).toContain("change and inspect application state through existing APIs or controllers");
-    expect(testsPrompt).toContain("Builders are the only test utilities allowed to access the database directly");
+    expect(testsPrompt).toContain(
+      "change and inspect application state through existing APIs or controllers",
+    );
+    expect(testsPrompt).toContain(
+      "Builders are the only test utilities allowed to access the database directly",
+    );
     expect(testsPrompt).toContain("Before adding a builder, inspect the existing builders");
     expect(testsPrompt).toContain("New builders are tested and provide sensible default values");
-    expect(testsPrompt).toContain("Test helpers never access the database directly unless they are builders");
+    expect(testsPrompt).toContain(
+      "Test helpers never access the database directly unless they are builders",
+    );
     expect(testsPrompt).toContain("do not introduce lint-rule disable directives");
     expect(testsPrompt).toContain("reuse existing testing utilities rather than reimplementing");
     expect(testsPrompt).toContain("type-system guarantees, trivial assignments");
@@ -49,7 +55,8 @@ describe("PR review lane prompts and tool policy", () => {
     expect(testsPrompt).toContain("do not inspect testing guides");
     expect(testsPrompt).toContain("when a concrete candidate depends on that context");
     expect(testsPrompt).toContain("directory named `drizzle` at any depth");
-    expect(testsPrompt).toContain("file with a `.sql` extension (case-insensitive)");
+    expect(testsPrompt).toContain("SQL files outside those directories are included");
+    expect(testsPrompt).toContain("Read the relevant ranges from `tmp/review/diff/full`");
     expect(testsPrompt).toContain(
       "Do not use `read-many-files-lines` to access them directly or indirectly",
     );
@@ -73,7 +80,9 @@ describe("PR review lane prompts and tool policy", () => {
     expect(testsPrompt).toContain("find another way to bypass the failure");
     expect(testsPrompt).toContain("even when it requires rethinking your approach");
     expect(testsPrompt).toContain("Bash is intentionally unavailable");
-    expect(metadataPrompt).toContain("Load and follow the explicitly configured `pr-metadata` skill");
+    expect(metadataPrompt).toContain(
+      "Load and follow the explicitly configured `pr-metadata` skill",
+    );
     expect(metadataPrompt).toContain('"type":"documentation|question"');
     expect(metadataPrompt).not.toContain('"path":"file"');
     expect(architecturePrompt).toContain("`ServerError` subclass, which derives from `TRPCError`");
@@ -100,15 +109,15 @@ describe("PR review lane prompts and tool policy", () => {
     expect(reviewAgentTimeout({})).toBe(DEFAULT_REVIEW_AGENT_TIMEOUT_MS);
     expect(reviewAgentInactivityTimeout({})).toBe(DEFAULT_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS);
     expect(reviewAgentTimeout({ PI_REVIEW_AGENT_TIMEOUT_MS: "120000" })).toBe(120_000);
-    expect(
-      reviewAgentInactivityTimeout({ PI_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS: "30000" }),
-    ).toBe(30_000);
+    expect(reviewAgentInactivityTimeout({ PI_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS: "30000" })).toBe(
+      30_000,
+    );
     expect(reviewAgentTimeout({ PI_REVIEW_AGENT_TIMEOUT_MS: "invalid" })).toBe(
       DEFAULT_REVIEW_AGENT_TIMEOUT_MS,
     );
-    expect(
-      reviewAgentInactivityTimeout({ PI_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS: "invalid" }),
-    ).toBe(DEFAULT_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS);
+    expect(reviewAgentInactivityTimeout({ PI_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS: "invalid" })).toBe(
+      DEFAULT_REVIEW_AGENT_INACTIVITY_TIMEOUT_MS,
+    );
   });
 
   test("enables repository inspection without exposing Bash to ordinary lanes", () => {
@@ -119,11 +128,7 @@ describe("PR review lane prompts and tool policy", () => {
 
     expect(defaultPolicy).toEqual({
       toolsEnabled: true,
-      allowedTools: [
-        REVIEW_AGENT_PARTIAL_FINDING_TOOL,
-        "read",
-        "read-many-files-lines",
-      ].join(","),
+      allowedTools: [REVIEW_AGENT_PARTIAL_FINDING_TOOL, "read", "read-many-files-lines"].join(","),
     });
     expect(dedupePolicy.allowedTools.split(",")).toContain("read-many-files-lines");
     expect(dedupePolicy.allowedTools.split(",")).not.toContain("get_data");
@@ -191,13 +196,13 @@ describe("PR review lane prompts and tool policy", () => {
     expect(guardedLaneSource).toContain("const allowCiAnalysisGhBash = true;");
     expect(guardedLaneSource).toContain(`pi.registerCommand("${REVIEW_AGENT_PROMPT_COMMAND}"`);
     expect(guardedLaneSource).not.toContain("getDataCallCount");
-    expect(guardedLaneSource).toContain('await pi.sendUserMessage(prompt);');
+    expect(guardedLaneSource).toContain("await pi.sendUserMessage(prompt);");
     expect(guardedLaneSource).toContain(`name: "${REVIEW_AGENT_PARTIAL_FINDING_TOOL}"`);
     expect(guardedLaneSource).toContain('promptSnippet: "Record a confirmed PR review finding');
     expect(guardedLaneSource).toContain("promptGuidelines:");
-    expect(guardedLaneSource).toContain('await appendFile(outputPath');
+    expect(guardedLaneSource).toContain("await appendFile(outputPath");
     expect(guardedLaneSource).toContain("Files under drizzle/ are outside review scope.");
-    expect(guardedLaneSource).toContain('tmp/session/ci-analysis/prompt.md');
+    expect(guardedLaneSource).toContain("tmp/session/ci-analysis/prompt.md");
     expect(reviewAgentToolGuardSource("tmp/session/tests", "tmp/session/shared")).toContain(
       "const allowCiAnalysisGhBash = false;",
     );

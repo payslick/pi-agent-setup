@@ -9,6 +9,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   annotateMessageLines,
+  appendMarkdownResponseInstruction,
   createMessageMetadataResolver,
   cycleConversationView,
   formatMarkdownHeadingsForTerminal,
@@ -23,6 +24,15 @@ import { formatReadManySpec } from "../read-many-files-lines";
 const stripTerminalCodes = (text: string): string => Bun.stripANSI(text);
 
 describe("conversation presentation", () => {
+  test("appends Markdown guidance without replacing or duplicating the system prompt", () => {
+    const first = appendMarkdownResponseInstruction("base prompt");
+    const second = appendMarkdownResponseInstruction(first);
+
+    expect(first).toStartWith("base prompt\n\n");
+    expect(first).toContain("Write every assistant response in Markdown.");
+    expect(second).toBe(first);
+  });
+
   test("formats read calls as file and line ranges", () => {
     expect(formatReadInput({ path: "src/app.ts", offset: 4, limit: 7 })).toBe("src/app.ts:4-10");
     expect(formatReadInput({ path: "src/app.ts" })).toBe("src/app.ts:1-end");

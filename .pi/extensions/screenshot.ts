@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -14,6 +15,11 @@ import { Type } from "typebox";
 import { assertProjectPath } from "./access-mode/path-policy";
 import { canExecute, getAccessProjectRoot } from "./access-mode/state";
 import { registerPrefixCommand } from "./prefix-mode/registry";
+import {
+  publishScreenshot,
+  type ScreenshotExecutor,
+  type ScreenshotContext,
+} from "./screenshot/publication";
 
 const STATUS_KEY = "screenshot";
 const WIDGET_KEY = "screenshot";
@@ -44,7 +50,9 @@ const screenshotSchema = Type.Object({
     }),
   ),
   upload: Type.Optional(
-    Type.Boolean({ description: "Upload to the GitHub screenshots release for PR embedding." }),
+    Type.Boolean({
+      description: "Upload as a GitHub attachment for PR embedding after visual approval.",
+    }),
   ),
   locale: Type.Optional(
     Type.String({ description: `Locale for URL resolution. Defaults to ${DEFAULT_LOCALE}.` }),
@@ -184,7 +192,7 @@ function execError(label: string, result: ExecResult): Error {
 }
 
 async function runBunScript(
-  pi: ExtensionAPI,
+  pi: ScreenshotExecutor,
   appRoot: string,
   scriptName: string,
   args: readonly string[],
@@ -208,7 +216,6 @@ function screenshotArgs(params: ScreenshotInput): string[] {
   const args = [params.urlOrAlias];
   appendRepeatedArgs(args, "--highlight", params.highlights);
   appendRepeatedArgs(args, "--action", params.actions);
-  if (params.upload) args.push("--upload");
   if (params.locale) args.push("--locale", params.locale);
   if (params.wait !== undefined) args.push("--wait", String(params.wait));
   if (params.timeout !== undefined) args.push("--timeout", String(params.timeout));
@@ -234,9 +241,9 @@ function parseScreenshotOutput(
   };
 }
 
-async function runScreenshot(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
+export async function runScreenshot(
+  pi: ScreenshotExecutor,
+  ctx: ScreenshotContext,
   params: ScreenshotInput,
   signal?: AbortSignal,
 ): Promise<ScreenshotRunResult> {
@@ -246,7 +253,22 @@ async function runScreenshot(
   const result = await runBunScript(pi, appRoot, "takeScreenshot.ts", args, signal, timeout);
   const output = trimOutput(result) || "[no output]";
   if (result.code !== 0) throw execError("take_screenshot", result);
-  return { target: params.urlOrAlias, appRoot, args, output, ...parseScreenshotOutput(output) };
+  const captured = parseScreenshotOutput(output);
+  if (!captured.localPath) throw new Error("Screenshot helper did not return a local PNG.");
+  const directory = path.join(ctx.cwd, "tmp", "screenshots");
+  await assertProjectPath(getAccessProjectRoot(ctx.cwd), directory);
+  await mkdir(directory, { recursive: true });
+  const localPath = path.join(directory, `${randomUUID()}.png`);
+  await copyFile(captured.localPath, localPath);
+  const published = params.upload ? await publishScreenshot(pi, ctx, { filePath: localPath }) : {};
+  return {
+    target: params.urlOrAlias,
+    appRoot,
+    args,
+    output: output.replaceAll(captured.localPath, localPath),
+    localPath,
+    ...published,
+  };
 }
 
 function resultLines(result: ScreenshotRunResult): string[] {
@@ -281,9 +303,7 @@ export function clearScreenshotWidget(ctx: ExtensionContext): void {
   if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 }
 
-export function screenshotErrorWidget(
-  message: string,
-): (tui: TUI, theme: Theme) => Component {
+export function screenshotErrorWidget(message: string): (tui: TUI, theme: Theme) => Component {
   return (_tui, theme) => ({
     invalidate() {},
     render(width) {
@@ -492,7 +512,7 @@ function screenshotPrompt(): string {
 - urlOrAlias accepts aliases such as employees, employee, employee settings, dashboard, payslips summary, companies, route patterns, or localhost URLs.
 - Use highlights for changed elements; prefer [data-testid]/[data-slot], then role/text selectors, then CSS.
 - Use actions to click tabs, open modals, scroll, or otherwise prepare state before highlighting.
-- Use upload=true when the screenshot should be embedded in a PR.
+- Capture with upload=false first; inspect the returned image, then use upload_screenshot to upload that exact retained PNG as a private-repository-safe GitHub attachment.
 - The app dev server and seeded database must already be running; do not start the dev server yourself.`;
 }
 
@@ -519,7 +539,7 @@ function registerScreenshotTool(pi: ExtensionAPI): void {
     name: "take_screenshot",
     label: "Take Screenshot",
     description:
-      "Take screenshots of application pages with optional element highlighting. Can upload to GitHub releases for PR embedding.",
+      "Capture a project-local PNG and return the image for inspection. Upload approved images as GitHub attachments for PR embedding.",
     promptSnippet:
       "Take an app screenshot from a URL alias/path with optional highlights/actions and GitHub upload.",
     promptGuidelines: [
@@ -527,7 +547,7 @@ function registerScreenshotTool(pi: ExtensionAPI): void {
       "Use highlights to add a red outline around changed elements before capture.",
       "Prefer [data-testid]/[data-slot], role/text selectors, then CSS selectors for highlights.",
       "Use actions for pre-screenshot clicks, modal opening, tab selection, or scrolling.",
-      "Set upload=true when the screenshot should be embedded in a PR.",
+      "Inspect the returned image before calling upload_screenshot with its localPath. Use upload=true only for an already approved capture.",
       "If the dev server is unavailable, ask the user to start it; do not start it yourself.",
     ],
     parameters: screenshotSchema,
@@ -535,9 +555,38 @@ function registerScreenshotTool(pi: ExtensionAPI): void {
     async execute(_toolCallId, params: ScreenshotInput, signal, _onUpdate, ctx) {
       const result = await runScreenshot(pi, ctx, params, signal);
       return {
-        content: [{ type: "text" as const, text: formatScreenshotResult(result) }],
+        content: [
+          { type: "text" as const, text: formatScreenshotResult(result) },
+          {
+            type: "image" as const,
+            data: (await readFile(result.localPath!)).toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
         details: result,
       };
+    },
+  });
+}
+
+function registerUploadScreenshotTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "upload_screenshot",
+    label: "Upload Screenshot",
+    description:
+      "Upload an inspected project-local PNG as a GitHub attachment. Retains the local image and returns durable private-PR-safe Markdown.",
+    parameters: Type.Object({
+      filePath: Type.String(),
+      repo: Type.Optional(
+        Type.String({
+          description: "Approved destination owner/repo; defaults to the current repository.",
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await publishScreenshot(pi, ctx, params);
+      return { content: [{ type: "text" as const, text: result.markdown }], details: result };
     },
   });
 }
@@ -581,5 +630,6 @@ registerPrefixCommand({
 export default function screenshotExtension(pi: ExtensionAPI): void {
   registerScreenshotPrompt(pi);
   registerScreenshotTool(pi);
+  registerUploadScreenshotTool(pi);
   registerScreenshotCommand(pi);
 }

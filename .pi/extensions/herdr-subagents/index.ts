@@ -1,33 +1,38 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
-import {
-  getMarkdownTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-  type MessageRenderer,
-} from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { appendFile } from "node:fs/promises";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { getAccessMode, getAccessProjectRoot, type AccessMode } from "../access-mode/state";
-import {
-  assertSubagentExecuteAccess,
-  piArgsForSpec,
-  resolveSubagentCwd,
-  subagentAccessEnvironment,
-} from "./access";
+import { assertSubagentExecuteAccess } from "./access";
 export {
   assertSubagentExecuteAccess,
   piArgsForSpec,
   resolveSubagentCwd,
   subagentAccessEnvironment,
 } from "./access";
+import { parseManageCommand, parseSpawnArgs, promptForSubagent } from "./commands";
+import { settledCompletionFromReference } from "./completion";
+import { validateImplementationAssignments } from "./assignments";
 import {
-  contractFilesForSpec,
-  validateImplementationAssignments,
-  writableFilesForSpec,
-} from "./assignments";
-import { resolveSubagentSpec } from "./profiles";
-import { completionFromSession } from "./session";
+  formatAgentHandoff,
+  nextAgentAttempt,
+  readAgentCheckpoint,
+  readPersistedWorkPacket,
+} from "./artifacts";
+import {
+  ensureSyntheticFailureForRecord,
+  loadSuccessfulHandoff,
+  persistLifecycleTransition,
+  runLoggedRecordOperation,
+  restartSpecFromPacket,
+  submitCheckpointFromEnvironment,
+  submitHandoffFromEnvironment,
+} from "./lifecycle";
+import { readSubagentOutbox } from "./outbox";
+import { formatSpawnedSubagents, formatSubagentRecord } from "./records";
+import { renderSubagentCompletionMessage } from "./render";
+export { renderSubagentCompletionMessage } from "./render";
+import { spawnOneHerdrSubagent } from "./spawn";
 import {
   askMainAgentSchema,
   DEFAULT_READ_LINES,
@@ -35,21 +40,21 @@ import {
   manageSubagentsSchema,
   MAX_SUBAGENTS_PER_CALL,
   spawnSubagentsSchema,
+  submitCheckpointSchema,
+  submitHandoffSchema,
   type AskMainAgentInput,
   type ManageSubagentsInput,
   type SpawnSubagentsInput,
+  type SubmitCheckpointInput,
+  type SubmitHandoffInput,
   type SubagentSpec,
 } from "./schemas";
 import {
-  agentNameForSpec,
   COMPLETION_MESSAGE_TYPE,
   CUSTOM_ENTRY_TYPE,
   formatQuestionForMainAgent,
   formatSubagentCompletionSummary,
   restoreRecordsForWorkspace,
-  sessionNameForSpec,
-  shortenHomePath,
-  tabLabelForSpec,
   type SpawnedSubagentRecord,
   type SubagentDoneEvent,
   type SubagentQuestion,
@@ -57,11 +62,12 @@ import {
 } from "./state";
 
 const EXTENSION_NAME = "herdr-subagents";
-const SPAWN_TOOL_NAME = "spawn_subagents";
-const MANAGE_TOOL_NAME = "manage_subagents";
+const SPAWN_TOOL_NAME = "herdr_spawn_agents";
+const MANAGE_TOOL_NAME = "herdr_manage_agents";
 const ASK_MAIN_TOOL_NAME = "ask_main_agent";
+const SUBMIT_CHECKPOINT_TOOL_NAME = "submit_checkpoint";
+const SUBMIT_HANDOFF_TOOL_NAME = "submit_handoff";
 const MAX_READ_LINES = 1000;
-const OUTBOX_ROOT = path.join(".pi", "tmp", "herdr-subagents");
 const HERDR_POLL_INTERVAL_MS = 1000;
 
 type HerdrAgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
@@ -108,12 +114,6 @@ let promptLocks = new Set<string>();
 let spawnLock = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | undefined;
-
-const previewText = (text: string | undefined, maxLength = 140): string => {
-  const compact = (text ?? "").replace(/\s+/g, " ").trim();
-  if (!compact) return "(idle)";
-  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
-};
 
 const clampReadLines = (lines: number | undefined): number => {
   if (typeof lines !== "number" || !Number.isFinite(lines)) return DEFAULT_READ_LINES;
@@ -305,33 +305,12 @@ const removeRecord = (
   settledPolls.delete(record.id);
   pendingQuestions.delete(record.id);
   pi.appendEntry(CUSTOM_ENTRY_TYPE, {
-    version: 4,
+    version: 5,
     removedId: record.id,
     removedAt: Date.now(),
     reason,
     completion,
   });
-};
-
-const writeOutboxEnv = async (root: string, id: string): Promise<string> => {
-  const directory = path.resolve(root, OUTBOX_ROOT);
-  await mkdir(directory, { recursive: true });
-  const outboxPath = path.join(directory, `${id}.jsonl`);
-  await appendFile(outboxPath, "", { encoding: "utf8", mode: 0o600 });
-  return outboxPath;
-};
-
-const writeSystemPromptFile = async (
-  root: string,
-  id: string,
-  systemPrompt: string | undefined,
-): Promise<string | undefined> => {
-  if (!systemPrompt?.trim()) return undefined;
-  const directory = path.resolve(root, OUTBOX_ROOT);
-  await mkdir(directory, { recursive: true });
-  const systemPromptPath = path.join(directory, `${id}.system-prompt.md`);
-  await writeFile(systemPromptPath, systemPrompt, { encoding: "utf8", mode: 0o600 });
-  return systemPromptPath;
 };
 
 const cleanupFailedSpawn = async (
@@ -359,64 +338,31 @@ const spawnOneSubagent = async (
   spec: SubagentSpec,
   mode: AccessMode,
   projectRoot: string,
-): Promise<SpawnedSubagentRecord> => {
-  const parentSessionId = ctx.sessionManager.getSessionId();
-  const resolved = resolveSubagentSpec(spec, spawningAgentDefaults(pi, ctx), parentSessionId);
-  const id = randomUUID();
-  const name = agentNameForSpec(resolved, id);
-  const tabLabel = tabLabelForSpec(resolved);
-  const sessionName = sessionNameForSpec(resolved, parentSessionId);
-  const cwd = await resolveSubagentCwd(ctx.cwd, resolved.cwd, mode, projectRoot);
-  const outboxPath = await writeOutboxEnv(ctx.cwd, id);
-  const systemPromptPath = await writeSystemPromptFile(ctx.cwd, id, resolved.systemPrompt);
-  const created = await createTab(pi, ctx, workspaceId, cwd, tabLabel, resolved.focus ?? false, {
-    PI_SUBAGENT_ID: id,
-    PI_SUBAGENT_NAME: name,
-    PI_SUBAGENT_TYPE: resolved.profile ?? "subagent",
-    PI_SUBAGENT_OUTBOX: outboxPath,
-    ...subagentAccessEnvironment(mode, projectRoot),
-  });
-  const record: SpawnedSubagentRecord = {
-    id,
-    name,
-    tabId: created.tab.tab_id,
-    paneId: created.root_pane.pane_id,
-    workspaceId,
-    tabLabel,
-    cwd,
-    promptPreview: previewText(resolved.prompt),
-    prompted: Boolean(resolved.prompt?.trim()),
-    promptGeneration: resolved.prompt?.trim() ? 1 : 0,
-    profile: resolved.profile,
-    model: resolved.model,
-    provider: resolved.provider,
-    thinking: resolved.thinking,
-    tools: resolved.tools,
-    skills: resolved.skills,
-    writableFiles: writableFilesForSpec(resolved, ctx.cwd),
-    contractFiles: contractFilesForSpec(resolved, ctx.cwd),
-    outboxPath,
-    replaceSystemPrompt: resolved.replaceSystemPrompt ?? false,
-    createdAt: Date.now(),
-  };
-  try {
-    await startAgent(pi, ctx, name, record.paneId, [
-      ...piArgsForSpec(resolved, projectRoot, systemPromptPath, mode),
-      "--name",
-      sessionName,
-      "--append-system-prompt",
-      `You are Herdr subagent ${name}. Use ask_main_agent when blocked.`,
-    ]);
-    if (resolved.prompt?.trim()) await promptAgent(pi, ctx.signal, name, resolved.prompt, true);
-    registry.set(record.id, record);
-    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
-    return record;
-  } catch (error) {
-    registry.delete(record.id);
-    await cleanupFailedSpawn(pi, ctx.signal, record.tabId);
-    throw error;
-  }
-};
+  restart?: { taskId: string; attempt: number; parentAgentId?: string },
+): Promise<SpawnedSubagentRecord> =>
+  spawnOneHerdrSubagent(
+    spec,
+    {
+      cwd: ctx.cwd,
+      projectRoot,
+      workspaceId,
+      mode,
+      parentSessionId: ctx.sessionManager.getSessionId(),
+      defaults: spawningAgentDefaults(pi, ctx),
+      restart,
+    },
+    {
+      createTab: (targetWorkspace, cwd, label, focus, environment) =>
+        createTab(pi, ctx, targetWorkspace, cwd, label, focus, environment),
+      startAgent: (name, paneId, args) => startAgent(pi, ctx, name, paneId, args),
+      promptAgent: (name, prompt) => promptAgent(pi, ctx.signal, name, prompt, true),
+      cleanupFailedSpawn: (tabId) => cleanupFailedSpawn(pi, ctx.signal, tabId),
+      persistRecord(record) {
+        registry.set(record.id, record);
+        pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
+      },
+    },
+  );
 
 const spawnSubagents = async (
   pi: ExtensionAPI,
@@ -433,7 +379,7 @@ const spawnSubagents = async (
     const projectRoot = getAccessProjectRoot(ctx.cwd);
     const herdr = ensureHerdr();
     await pruneMissingRecords(pi, ctx.signal, herdr.workspaceId);
-    validateImplementationAssignments(input.agents, [...registry.values()], ctx.cwd);
+    validateImplementationAssignments(input.agents, [...registry.values()], projectRoot);
     const records: SpawnedSubagentRecord[] = [];
     for (const spec of input.agents) {
       records.push(await spawnOneSubagent(pi, ctx, herdr.workspaceId, spec, mode, projectRoot));
@@ -461,33 +407,39 @@ const pruneMissingRecords = async (
   signal: AbortSignal | undefined,
   workspaceId: string,
 ): Promise<number> => {
-  let removed = 0;
+  let missing = 0;
   for (const record of registry.values()) {
     if (record.workspaceId !== workspaceId) {
       registry.delete(record.id);
-      removed += 1;
       continue;
     }
-    if (await getAgent(pi, signal, record.paneId)) continue;
-    removeRecord(pi, record, "missing-agent");
-    removed += 1;
+    if (record.lifecycleStatus === "missing" || (await getAgent(pi, signal, record.paneId))) continue;
+    if (!record.mainSessionId || !record.taskId || !record.attempt) {
+      removeRecord(pi, record, "missing-agent-without-durable-packet");
+      missing += 1;
+      continue;
+    }
+    record.prompted = false;
+    await persistLifecycleTransition(record, "missing", "agent.missing", {
+      message: "Herdr no longer reports this agent.",
+    });
+    await ensureSyntheticFailureForRecord(
+      record,
+      "error",
+      "Herdr no longer reports this agent.",
+    );
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
+    missing += 1;
   }
-  return removed;
+  return missing;
 };
 
 const formatRecord = async (
   pi: ExtensionAPI,
   signal: AbortSignal | undefined,
   record: SpawnedSubagentRecord,
-): Promise<string> => {
-  const agent = await getAgent(pi, signal, record.paneId);
-  return [
-    `${record.name} [${agent?.agent_status ?? "missing"}] tab=${record.tabLabel} ${record.tabId}`,
-    `  cwd: ${shortenHomePath(record.cwd)}`,
-    `  task: ${record.promptPreview}`,
-    `  profile: ${record.profile ?? "none"}`,
-  ].join("\n");
-};
+): Promise<string> =>
+  formatSubagentRecord(record, (await getAgent(pi, signal, record.paneId))?.agent_status);
 
 const listRecords = async (pi: ExtensionAPI, signal: AbortSignal | undefined): Promise<string> => {
   if (!registry.size) return "No live Herdr subagents in this session branch.";
@@ -511,6 +463,7 @@ const appendSubagentQuestion = async (params: AskMainAgentInput): Promise<string
     context: params.context,
     whatDone: params.whatDone,
     options: params.options,
+    artifactPath: params.artifactPath,
     timestamp: Date.now(),
   };
   await appendFile(outboxPath, `${JSON.stringify(question)}\n`, "utf8");
@@ -518,35 +471,12 @@ const appendSubagentQuestion = async (params: AskMainAgentInput): Promise<string
 };
 
 const readOutboxEvents = async (record: SpawnedSubagentRecord): Promise<SubagentQuestion[]> => {
-  let fileStat;
-  try {
-    fileStat = await stat(record.outboxPath);
-  } catch {
-    return [];
-  }
-  let offset = outboxOffsets.get(record.id) ?? record.outboxOffset ?? 0;
-  if (fileStat.size < offset) offset = 0;
-  if (fileStat.size === offset) return [];
-  const buffer = Buffer.alloc(fileStat.size - offset);
-  const handle = await open(record.outboxPath, "r");
-  try {
-    await handle.read(buffer, 0, buffer.length, offset);
-  } finally {
-    await handle.close();
-  }
-  outboxOffsets.set(record.id, fileStat.size);
-  return buffer
-    .toString("utf8")
-    .split("\n")
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        const event = JSON.parse(line) as SubagentQuestion;
-        return event.type === "question" ? [event] : [];
-      } catch {
-        return [];
-      }
-    });
+  const result = await readSubagentOutbox(
+    record,
+    outboxOffsets.get(record.id) ?? record.outboxOffset ?? 0,
+  );
+  outboxOffsets.set(record.id, result.offset);
+  return result.questions;
 };
 
 const sendMainMessage = (
@@ -577,9 +507,14 @@ const forwardQuestion = async (
     );
   pendingQuestions.add(record.id);
   record.waitingForAnswer = true;
+  if (record.mainSessionId && record.taskId && record.attempt)
+    await persistLifecycleTransition(record, "waiting-main", "agent.question.sent", {
+      message: question.question,
+      data: { artifactPath: question.artifactPath },
+    });
   const recent = await readAgent(pi, ctx.signal, record.paneId, 80).catch(() => "");
   sendMainMessage(pi, ctx, formatQuestionForMainAgent(record, question, recent));
-  pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+  pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
 };
 
 const finishSuccessfulSubagent = async (
@@ -588,6 +523,25 @@ const finishSuccessfulSubagent = async (
   record: SpawnedSubagentRecord,
   completion: SubagentDoneEvent,
 ): Promise<void> => {
+  try {
+    const handoff = await loadSuccessfulHandoff(record.projectRoot ?? ctx.cwd, record);
+    completion.result = formatAgentHandoff(handoff);
+    completion.handoffPath = record.handoffPath;
+    await persistLifecycleTransition(record, "succeeded", "agent.succeeded", {
+      data: { handoffPath: record.handoffPath },
+    });
+  } catch (error) {
+    record.prompted = false;
+    await persistLifecycleTransition(record, "blocked", "agent.handoff.invalid", { error });
+    sendMainMessage(
+      pi,
+      ctx,
+      `Herdr agent ${record.name} cannot complete: ${error instanceof Error ? error.message : String(error)}\nDurable attempt: ${record.workPacketPath ?? "unknown"}`,
+      COMPLETION_MESSAGE_TYPE,
+    );
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
+    return;
+  }
   if (!record.completionDelivered) {
     sendMainMessage(
       pi,
@@ -596,7 +550,7 @@ const finishSuccessfulSubagent = async (
       COMPLETION_MESSAGE_TYPE,
     );
     record.completionDelivered = true;
-    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
   }
   await closeTab(pi, ctx.signal, record.tabId);
   removeRecord(pi, record, "success", completion);
@@ -613,7 +567,21 @@ const handleCompletion = async (
     await finishSuccessfulSubagent(pi, ctx, record, completion);
     return;
   }
-  if (completion.status === "error" || completion.status === "aborted") {
+  if (
+    completion.status === "error" ||
+    completion.status === "aborted" ||
+    completion.status === "blocked"
+  ) {
+    const status = completion.status === "error" ? "failed" : completion.status;
+    const message = completion.errorMessage || completion.result || `Agent ${completion.status}.`;
+    if (record.mainSessionId && record.taskId && record.attempt) {
+      await persistLifecycleTransition(record, status, `agent.${completion.status}`, {
+        message,
+        ...(completion.status === "error" ? { error: new Error(message) } : {}),
+      });
+      if (completion.status !== "blocked")
+        await ensureSyntheticFailureForRecord(record, completion.status, message);
+    }
     sendMainMessage(
       pi,
       ctx,
@@ -621,7 +589,7 @@ const handleCompletion = async (
       COMPLETION_MESSAGE_TYPE,
     );
     record.prompted = false;
-    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
   }
 };
 
@@ -631,25 +599,28 @@ const pollSubagentOutboxes = async (pi: ExtensionAPI, ctx: ExtensionContext): Pr
     for (const question of questions) await forwardQuestion(pi, ctx, record, question);
     if (!questions.length) continue;
     record.outboxOffset = outboxOffsets.get(record.id);
-    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
   }
-};
-
-const settledCompletion = async (
-  record: SpawnedSubagentRecord,
-  agent: HerdrAgent,
-): Promise<SubagentDoneEvent | undefined> => {
-  const session = agent.agent_session;
-  if (session?.kind === "path" && session.value)
-    return completionFromSession(record, session.value);
-  return undefined;
 };
 
 const pollSubagentStates = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> => {
   for (const record of registry.values()) {
     const agent = await getAgent(pi, ctx.signal, record.paneId);
     if (!agent) {
-      removeRecord(pi, record, "missing-agent");
+      if (record.lifecycleStatus !== "missing") {
+        record.prompted = false;
+        if (record.mainSessionId && record.taskId && record.attempt) {
+          await persistLifecycleTransition(record, "missing", "agent.missing", {
+            message: "Herdr no longer reports this agent.",
+          });
+          await ensureSyntheticFailureForRecord(
+            record,
+            "error",
+            "Herdr no longer reports this agent.",
+          );
+          pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
+        } else removeRecord(pi, record, "missing-agent-without-durable-packet");
+      }
       updateSubagentStatus(ctx);
       continue;
     }
@@ -659,7 +630,10 @@ const pollSubagentStates = async (pi: ExtensionAPI, ctx: ExtensionContext): Prom
       settledPolls.delete(record.id);
       continue;
     }
-    const settled = agent.agent_status === "idle" || agent.agent_status === "done";
+    const settled =
+      agent.agent_status === "idle" ||
+      agent.agent_status === "done" ||
+      agent.agent_status === "blocked";
     if (
       !settled ||
       !record.prompted ||
@@ -677,10 +651,10 @@ const pollSubagentStates = async (pi: ExtensionAPI, ctx: ExtensionContext): Prom
       for (const question of questions) await forwardQuestion(pi, ctx, record, question);
       if (questions.length) {
         record.outboxOffset = outboxOffsets.get(record.id);
-        pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+        pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
       }
       if (pendingQuestions.has(record.id)) continue;
-      const completion = await settledCompletion(record, agent);
+      const completion = await settledCompletionFromReference(record, agent.agent_session);
       if (
         completion &&
         generation === (record.promptGeneration ?? 0) &&
@@ -702,7 +676,16 @@ const startMaintenanceLoop = (pi: ExtensionAPI, ctx: ExtensionContext): void => 
       await pollSubagentOutboxes(pi, ctx);
       await pollSubagentStates(pi, ctx);
       updateSubagentStatus(ctx);
-    } catch {
+    } catch (error) {
+      for (const record of registry.values()) {
+        if (!record.mainSessionId || !record.taskId || !record.attempt) continue;
+        await persistLifecycleTransition(
+          record,
+          record.lifecycleStatus ?? "working",
+          "maintenance.failed",
+          { error },
+        ).catch(() => undefined);
+      }
       updateSubagentStatus(ctx);
     } finally {
       maintenanceRunning = false;
@@ -727,12 +710,57 @@ const handleManageAction = async (
   const removed = await pruneMissingRecords(pi, ctx.signal, herdr.workspaceId);
   if (input.action === "list") {
     const records = await listRecords(pi, ctx.signal);
-    return removed ? `Pruned ${removed} stale subagent record(s).\n\n${records}` : records;
+    return removed ? `Marked ${removed} missing subagent record(s).\n\n${records}` : records;
   }
   const record = findRecord(input.id);
   if (!record) return missingSubagentActionResult(input);
+  if (input.action === "restart") {
+    if (!record.workPacketPath || !record.mainSessionId || !record.taskId)
+      throw new Error(`${record.name} has no durable work packet and cannot be restarted.`);
+    const { packet, checkpoint } = await runLoggedRecordOperation(
+      record,
+      "agent.restart.artifacts.invalid",
+      async () => ({
+        packet: await readPersistedWorkPacket(record.workPacketPath!),
+        checkpoint: record.checkpointPath
+          ? await readAgentCheckpoint(record.checkpointPath)
+          : undefined,
+      }),
+    );
+    const spec = restartSpecFromPacket(packet, checkpoint);
+    const mode = getAccessMode();
+    const projectRoot = getAccessProjectRoot(ctx.cwd);
+    const attempt = await nextAgentAttempt(projectRoot, record.mainSessionId, record.taskId);
+    const existing = await getAgent(pi, ctx.signal, record.paneId);
+    if (existing)
+      await runLoggedRecordOperation(record, "agent.restart.close.failed", () =>
+        closeTab(pi, ctx.signal, record.tabId),
+      );
+    await persistLifecycleTransition(record, "aborted", "agent.restart.requested", {
+      message: `Restarting as attempt ${attempt}.`,
+    });
+    await ensureSyntheticFailureForRecord(
+      record,
+      "aborted",
+      `Attempt ${record.attempt ?? "legacy"} was replaced by restart attempt ${attempt}.`,
+    );
+    removeRecord(pi, record, "restarted");
+    validateImplementationAssignments([spec], [...registry.values()], projectRoot);
+    const restarted = await spawnOneSubagent(
+      pi,
+      ctx,
+      herdr.workspaceId,
+      spec,
+      mode,
+      projectRoot,
+      { taskId: record.taskId, attempt, parentAgentId: record.id },
+    );
+    return `Restarted ${record.name} as ${restarted.name} attempt ${attempt}.`;
+  }
   if (input.action === "read")
-    return readAgent(pi, ctx.signal, record.paneId, clampReadLines(input.lines));
+    return runLoggedRecordOperation(record, "agent.read.failed", () =>
+      readAgent(pi, ctx.signal, record.paneId, clampReadLines(input.lines)),
+    );
   if (input.action === "prompt") {
     if (!input.message?.trim()) throw new Error("Message is required for action=prompt.");
     if (promptLocks.has(record.id))
@@ -745,94 +773,59 @@ const handleManageAction = async (
     record.prompted = true;
     record.promptGeneration = (record.promptGeneration ?? 0) + 1;
     record.waitingForAnswer = false;
-    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+    pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
     try {
       await promptAgent(pi, ctx.signal, record.paneId, input.message, false);
       awaitingWorking.delete(record.id);
+      if (record.mainSessionId && record.taskId && record.attempt)
+        await persistLifecycleTransition(record, "working", "agent.prompt.delivered", {
+          message: "The main thread delivered a follow-up prompt.",
+        });
       return `Prompted ${record.name}.`;
     } catch (error) {
       awaitingWorking.delete(record.id);
       record.promptGeneration = Math.max(0, (record.promptGeneration ?? 1) - 1);
       if (wasWaitingForAnswer) pendingQuestions.add(record.id);
       record.waitingForAnswer = wasWaitingForAnswer;
-      pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 4, record });
+      pi.appendEntry(CUSTOM_ENTRY_TYPE, { version: 5, record });
+      if (record.mainSessionId && record.taskId && record.attempt)
+        await persistLifecycleTransition(record, "blocked", "agent.prompt.failed", { error });
       throw error;
     } finally {
       promptLocks.delete(record.id);
     }
   }
   if (input.action === "focus") {
-    await runHerdr(pi, ["agent", "focus", record.paneId], ctx.signal);
+    await runLoggedRecordOperation(record, "agent.focus.failed", () =>
+      runHerdr(pi, ["agent", "focus", record.paneId], ctx.signal),
+    );
     return `Focused ${record.name}.`;
   }
   if (input.action === "abort") {
-    await runHerdr(pi, ["agent", "send-keys", record.paneId, "ctrl+c"], ctx.signal);
+    await runLoggedRecordOperation(record, "agent.abort.failed", () =>
+      runHerdr(pi, ["agent", "send-keys", record.paneId, "ctrl+c"], ctx.signal),
+    );
+    if (record.mainSessionId && record.taskId && record.attempt)
+      await persistLifecycleTransition(record, "aborted", "agent.abort.requested", {
+        message: "The main thread requested an abort.",
+      });
     return `Sent abort to ${record.name}.`;
   }
-  await closeTab(pi, ctx.signal, record.tabId);
+  if (record.mainSessionId && record.taskId && record.attempt) {
+    await persistLifecycleTransition(record, "aborted", "agent.closed", {
+      message: "The main thread closed this attempt.",
+    });
+    await ensureSyntheticFailureForRecord(
+      record,
+      "aborted",
+      "The main thread closed this attempt.",
+    );
+  }
+  await runLoggedRecordOperation(record, "agent.close.failed", () =>
+    closeTab(pi, ctx.signal, record.tabId),
+  );
   removeRecord(pi, record, "closed");
   return `Closed ${record.name} and tab ${record.tabLabel}.`;
-};
-
-const spawnResultText = (records: SpawnedSubagentRecord[]): string =>
-  [
-    `Started ${records.length} Herdr subagent${records.length === 1 ? "" : "s"}.`,
-    ...records.map(
-      (record) =>
-        `- ${record.name}: tab ${record.tabLabel} (${record.tabId})\n  task: ${record.promptPreview}`,
-    ),
-  ].join("\n");
-
-const parseSpawnArgs = (args: string): SpawnSubagentsInput | null => {
-  const trimmed = args.trim();
-  if (!trimmed) return null;
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("["))
-    return { agents: [{ prompt: trimmed }] };
-  const parsed = JSON.parse(trimmed) as SpawnSubagentsInput | SubagentSpec[] | SubagentSpec;
-  if (Array.isArray(parsed)) return { agents: parsed };
-  if ("agents" in parsed) return parsed;
-  return { agents: [parsed] };
-};
-
-const promptForSubagent = async (ctx: ExtensionContext): Promise<SpawnSubagentsInput | null> => {
-  if (!ctx.hasUI) return null;
-  const prompt = await ctx.ui.editor("Subagent task (optional; blank starts idle)", "");
-  const focus = await ctx.ui.confirm("Focus new Herdr tab?", "No keeps the current tab focused.");
-  return { agents: [{ prompt: prompt?.trim() || undefined, focus }] };
-};
-
-const parseManageCommand = (args: string): ManageSubagentsInput => {
-  const trimmed = args.trim();
-  if (!trimmed) return { action: "list" };
-  const [action, id, third, ...rest] = trimmed.split(/\s+/);
-  if (action === "prompt")
-    return { action, id, message: [third, ...rest].filter(Boolean).join(" ") };
-  if (!["list", "read", "focus", "abort", "close"].includes(action))
-    throw new Error(
-      "Usage: /agents [list|read <id> [lines]|prompt <id> <message>|focus <id>|abort <id>|close <id>]",
-    );
-  return {
-    action: action as ManageSubagentsInput["action"],
-    id,
-    lines: third ? Number(third) : undefined,
-  };
-};
-
-const completionMessageText = (content: Parameters<MessageRenderer>[0]["content"]): string =>
-  typeof content === "string"
-    ? content
-    : content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-
-const completionPreview = (markdown: string): string =>
-  markdown
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => /^(?:✅|❌|⏹️|❔)\s/u.test(line)) ?? "Agent returned.";
-
-export const renderSubagentCompletionMessage: MessageRenderer = (message, { expanded }, theme) => {
-  const markdown = completionMessageText(message.content);
-  if (expanded) return new Markdown(markdown, 1, 0, getMarkdownTheme());
-  return new Text(`${completionPreview(markdown)} ${theme.fg("dim", "(Ctrl+O to expand)")}`, 1, 0);
 };
 
 const registerLifecycle = (pi: ExtensionAPI): void => {
@@ -883,6 +876,36 @@ const registerTools = (pi: ExtensionAPI): void => {
   });
 
   pi.registerTool({
+    name: SUBMIT_CHECKPOINT_TOOL_NAME,
+    label: "Persist Herdr checkpoint",
+    description:
+      "For Herdr workers: persist restartable progress, remaining work, validation, and blockers in the current attempt.",
+    parameters: submitCheckpointSchema,
+    async execute(_toolCallId, params: SubmitCheckpointInput) {
+      const checkpointPath = await submitCheckpointFromEnvironment(params);
+      return {
+        content: [{ type: "text" as const, text: `Checkpoint saved: ${checkpointPath}` }],
+        details: { checkpointPath },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: SUBMIT_HANDOFF_TOOL_NAME,
+    label: "Persist Herdr handoff",
+    description:
+      "For Herdr workers: persist the canonical completion, blocked, error, or internal-module-request handoff for the current attempt.",
+    parameters: submitHandoffSchema,
+    async execute(_toolCallId, params: SubmitHandoffInput) {
+      const handoffPath = await submitHandoffFromEnvironment(params);
+      return {
+        content: [{ type: "text" as const, text: `Handoff saved: ${handoffPath}` }],
+        details: { handoffPath },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: SPAWN_TOOL_NAME,
     label: "Start Herdr subagents",
     description:
@@ -890,21 +913,22 @@ const registerTools = (pi: ExtensionAPI): void => {
     promptGuidelines: [
       "Use structured workPacket ownership for implementation profiles.",
       "Never overlap writableFiles or let workers modify contractFiles.",
-      "Use manage_subagents to inspect, prompt, focus, abort, or close workers.",
+      "Use herdr_manage_agents to inspect, prompt, focus, abort, close, or restart workers.",
+      "Workers must persist checkpoints and a canonical handoff before completion.",
     ],
     parameters: spawnSubagentsSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const records = await spawnSubagents(pi, ctx, params);
       updateSubagentStatus(ctx);
       return {
-        content: [{ type: "text" as const, text: spawnResultText(records) }],
+        content: [{ type: "text" as const, text: formatSpawnedSubagents(records) }],
         details: { records },
       };
     },
     renderCall(args, theme) {
       const agents = Array.isArray(args.agents) ? args.agents : [];
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("spawn_subagents "))}${theme.fg("accent", `${agents.length} Herdr tab${agents.length === 1 ? "" : "s"}`)}`,
+        `${theme.fg("toolTitle", theme.bold("herdr_spawn_agents "))}${theme.fg("accent", `${agents.length} Herdr tab${agents.length === 1 ? "" : "s"}`)}`,
         0,
         0,
       );
@@ -914,7 +938,7 @@ const registerTools = (pi: ExtensionAPI): void => {
   pi.registerTool({
     name: MANAGE_TOOL_NAME,
     label: "Manage Herdr subagents",
-    description: "List, read, prompt, focus, abort, or close Herdr-managed subagents.",
+    description: "List, read, prompt, focus, abort, close, or restart Herdr-managed subagents.",
     parameters: manageSubagentsSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const text = await handleManageAction(pi, ctx, params);
@@ -933,7 +957,7 @@ const registerCommands = (pi: ExtensionAPI): void => {
         if (!input) return;
         const records = await spawnSubagents(pi, ctx, input);
         updateSubagentStatus(ctx);
-        ctx.ui.notify(spawnResultText(records), "info");
+        ctx.ui.notify(formatSpawnedSubagents(records), "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
@@ -941,7 +965,7 @@ const registerCommands = (pi: ExtensionAPI): void => {
   });
 
   pi.registerCommand("agents", {
-    description: "Manage Herdr subagents: list, read, prompt, focus, abort, or close.",
+    description: "Manage Herdr subagents: list, read, prompt, focus, abort, close, or restart.",
     handler: async (args, ctx) => {
       try {
         const input = parseManageCommand(args);

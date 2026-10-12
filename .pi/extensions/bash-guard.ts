@@ -5,7 +5,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isBashToolResult, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 
-import { PROJECT_PATH_ERROR, projectPathIsAllowed } from "./access-mode/path-policy";
+import {
+  PROJECT_PATH_ERROR,
+  projectPathIsAllowed,
+  resolveAccessPath,
+} from "./access-mode/path-policy";
 import { isBashActionAllowed } from "./access-mode/tool-policy";
 import {
   canAccessHostPaths,
@@ -28,6 +32,8 @@ const AD_HOC_SCRIPT_ERROR = `Blocked: ad hoc interpreter scripts are not allowed
 The command was not run and no files were changed. Do not retry it in Python, JavaScript/TypeScript, Bun, Node, Ruby, Perl, AWK, shell, another language, a heredoc, or a temporary script.
 Use structured read/search tools, \`rg\` for searching and filtering, \`jq\` for JSON, \`multi-edit\` for existing-file changes, or an existing checked-in project command.`;
 const DEV_SERVER_ERROR = "never run the dev server; use `bun scripts/find-port.ts --wait` instead";
+const HERDR_WORKER_ERROR =
+  "Herdr workers cannot launch or manage agents directly. Submit a checkpoint and ask the main thread to orchestrate.";
 const EXTENSION_FAILURE_ERROR = "bash guard extension failed";
 const EXIT_CODE_ONE = "Exit code: 1";
 const EXIT_CODE_UNKNOWN = "Exit code: unknown";
@@ -38,17 +44,19 @@ const FIND_RG_GUIDANCE =
   "Example: `rg --files --hidden --no-ignore . -g '*.ts' -g '!node_modules/**'`. Do not retry the `find` command.";
 
 export interface RuleViolation {
-  rule: "access-mode" | "workdir" | "ad-hoc-script" | "dev-server";
+  rule: "access-mode" | "workdir" | "ad-hoc-script" | "dev-server" | "herdr-orchestration";
   detail: string;
 }
 
 export interface BashAnalysisOptions {
   requireExecute?: boolean;
+  isSubagent?: boolean;
 }
 
 interface ShellToken {
   text: string;
   quoted: boolean;
+  end: number;
 }
 
 interface RebuiltShellToken {
@@ -130,9 +138,9 @@ function shellTokenize(command: string): ShellToken[] {
   let quote: "'" | '"' | "`" | "" = "";
   let tokenQuoted = false;
 
-  function pushCurrent() {
+  function pushCurrent(end: number) {
     if (!current && !tokenQuoted) return;
-    tokens.push({ text: current, quoted: tokenQuoted });
+    tokens.push({ text: current, quoted: tokenQuoted, end });
     current = "";
     tokenQuoted = false;
   }
@@ -164,25 +172,26 @@ function shellTokenize(command: string): ShellToken[] {
 
     if (char === "\\" && next) {
       current += next;
+      tokenQuoted = true;
       index += 1;
       continue;
     }
 
     if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
-      pushCurrent();
-      tokens.push({ text: `${char}${next}`, quoted: false });
+      pushCurrent(index);
+      tokens.push({ text: `${char}${next}`, quoted: false, end: index + 2 });
       index += 1;
       continue;
     }
 
     if (shellOperators.has(char)) {
-      pushCurrent();
-      tokens.push({ text: char, quoted: false });
+      pushCurrent(index);
+      tokens.push({ text: char, quoted: false, end: index + 1 });
       continue;
     }
 
     if (/\s/.test(char)) {
-      pushCurrent();
+      pushCurrent(index);
       continue;
     }
 
@@ -195,8 +204,24 @@ function shellTokenize(command: string): ShellToken[] {
     current += char;
   }
 
-  pushCurrent();
+  pushCurrent(command.length);
   return tokens;
+}
+
+function isCommandBreaker(token: ShellToken): boolean {
+  return !token.quoted && commandBreakers.has(token.text);
+}
+
+function splitAndCommands(command: string): string[] {
+  const commands: string[] = [];
+  let start = 0;
+  for (const token of shellTokenize(command)) {
+    if (token.quoted || token.text !== "&&") continue;
+    commands.push(command.slice(start, token.end - 2));
+    start = token.end;
+  }
+  commands.push(command.slice(start));
+  return commands;
 }
 
 function commandSegments(tokens: ShellToken[]): string[][] {
@@ -204,7 +229,7 @@ function commandSegments(tokens: ShellToken[]): string[][] {
   let current: string[] = [];
 
   for (const token of tokens) {
-    if (commandBreakers.has(token.text)) {
+    if (isCommandBreaker(token)) {
       if (current.length > 0) segments.push(current);
       current = [];
       continue;
@@ -509,7 +534,7 @@ export function replaceSearchCommand(command: string): SearchRewriteResult | nul
   }
 
   for (const token of tokens) {
-    if (commandBreakers.has(token.text)) {
+    if (isCommandBreaker(token)) {
       flushSegment();
       rebuiltTokens.push({ text: token.text, operator: true });
       continue;
@@ -608,8 +633,13 @@ function isInformationalInvocation(args: string[]): boolean {
   return args.length > 0 && args.every((arg) => interpreterInfoFlags.has(arg));
 }
 
-function hasTemporaryScriptPath(args: string[]): boolean {
-  return args.some((arg) => temporaryScriptPathPattern.test(arg));
+function hasTemporaryScriptPath(command: string, args: string[]): boolean {
+  const [operation, target] = args;
+  const paths =
+    command === "bun" && operation === "run" && target && !target.startsWith("-")
+      ? [target]
+      : args;
+  return paths.some((arg) => temporaryScriptPathPattern.test(arg));
 }
 
 function isAdHocInterpreterInvocation(words: string[]): boolean {
@@ -617,7 +647,7 @@ function isAdHocInterpreterInvocation(words: string[]): boolean {
   const command = normalizeCommandName(runnableWords[0] ?? "");
   const args = runnableWords.slice(1);
   if (!isScriptInterpreterCommand(command)) return false;
-  if (hasTemporaryScriptPath(args)) return true;
+  if (hasTemporaryScriptPath(command, args)) return true;
 
   if (isPythonCommand(command)) {
     if (args.includes("-") || hasInlineFlag(args, pythonInlineFlags)) return true;
@@ -643,6 +673,13 @@ function hasInterpreterHeredoc(command: string): boolean {
   return /(?:^|[\s;&|])(?:python\d*(?:\.\d+)?|pythonw|pypy\d?|py|node|bun|tsx|ts-node|deno|ruby|perl|php|lua|rscript|r|bash|dash|fish|ksh|sh|zsh)(?:\s+[^\n;&|]*)?\s*<</i.test(
     command,
   );
+}
+
+function hasHerdrInvocation(tokens: ShellToken[]): boolean {
+  return commandSegments(tokens).some((segment) => {
+    const words = unwrapCommandWrappers(segment);
+    return normalizeCommandName(words[0] ?? "") === "herdr";
+  });
 }
 
 function hasAdHocScriptUsage(command: string, tokens: ShellToken[]): boolean {
@@ -800,10 +837,12 @@ function bashPathCandidates(command: string): string[] {
 async function canonicalPathViolation(
   command: string,
   root: string,
+  cwd: string,
   mode: AccessMode,
 ): Promise<string | null> {
   for (const candidate of bashPathCandidates(command))
-    if (!(await projectPathIsAllowed(root, candidate, mode))) return candidate;
+    if (!(await projectPathIsAllowed(root, resolveAccessPath(cwd, candidate), mode)))
+      return candidate;
   return null;
 }
 
@@ -818,10 +857,24 @@ export function analyzeBashCommand(
   mode: AccessMode = getAccessMode(),
   options: BashAnalysisOptions = {},
 ): RuleViolation | null {
+  for (const segment of splitAndCommands(command)) {
+    const violation = analyzeBashSegment(segment, mode, options);
+    if (violation) return violation;
+  }
+  return null;
+}
+
+function analyzeBashSegment(
+  command: string,
+  mode: AccessMode,
+  options: BashAnalysisOptions,
+): RuleViolation | null {
   if ((options.requireExecute ?? true) && !canExecute(mode))
     return { rule: "access-mode", detail: BASH_ACCESS_ERROR };
 
   const tokens = shellTokenize(command);
+  if (options.isSubagent && hasHerdrInvocation(tokens))
+    return { rule: "herdr-orchestration", detail: HERDR_WORKER_ERROR };
   if (
     !canAccessHostPaths(mode) &&
     (hasRawDirectoryTrick(command) ||
@@ -908,16 +961,21 @@ export default function bashGuard(pi: ExtensionAPI) {
         rgReplacementByToolCallId.set(event.toolCallId, replacement.command);
       }
 
-      const violation = analyzeBashCommand(event.input.command, mode, { requireExecute: false });
-      if (violation) {
-        rgReplacementByToolCallId.delete(event.toolCallId);
-        return block(violation.detail);
-      }
       const projectRoot = getAccessProjectRoot(ctx.cwd);
-      const rejectedPath = await canonicalPathViolation(event.input.command, projectRoot, mode);
-      if (rejectedPath) {
-        rgReplacementByToolCallId.delete(event.toolCallId);
-        return block(canonicalPathViolationError(rejectedPath));
+      for (const command of splitAndCommands(event.input.command)) {
+        const violation = analyzeBashSegment(command, mode, {
+          requireExecute: false,
+          isSubagent: Boolean(process.env.PI_SUBAGENT_ID),
+        });
+        if (violation) {
+          rgReplacementByToolCallId.delete(event.toolCallId);
+          return block(violation.detail);
+        }
+        const rejectedPath = await canonicalPathViolation(command, projectRoot, ctx.cwd, mode);
+        if (rejectedPath) {
+          rgReplacementByToolCallId.delete(event.toolCallId);
+          return block(canonicalPathViolationError(rejectedPath));
+        }
       }
       return undefined;
     } catch (error) {

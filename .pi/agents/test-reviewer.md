@@ -28,15 +28,6 @@ Run the narrowest relevant package validation from `app/`; from the repository r
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Do not infer or request edits outside the packet. If a contract deviation or scope decision is needed, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `manage_subagents`.
+Do not use `herdr_spawn_agents` or `herdr_manage_agents`.
 
-Return actionable findings first, each with severity, file path, affected behavior, and a concrete fix. Then return this handoff:
-
-## Handoff
-
-- Summary:
-- Changed files: none
-- Validation:
-- Deviations:
-- Risks:
-- Follow-up:
+Return actionable findings first, each with severity, file path, affected behavior, and a concrete fix. Before returning, call `submit_handoff` with changed files empty and the canonical review result. In the final response, report only the saved handoff path and a one-line status.

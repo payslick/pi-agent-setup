@@ -173,6 +173,8 @@ function renderCoverageSection(coverage: ReviewSkillCoverage): string[] {
 function coverageStatusLabel(status: ReviewCoverageStatus): string {
   const labels: Record<ReviewCoverageStatus, string> = {
     covered: "✅ covered",
+    complete: "✅ Complete",
+    failed: "❌ Failed",
     partial: "◐ partial",
     skipped: "⏭️ skipped",
     missing: "❌ missing",

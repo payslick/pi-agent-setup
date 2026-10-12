@@ -11,7 +11,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { DEFAULT_ACCESS_MODE, setAccessMode } from "../access-mode/state";
-import projectIndex from "../project-index/index";
+import projectIndex, { findAffectedTests } from "../project-index/index";
 
 type ProjectIndexToolName =
   | "project_index_search"
@@ -768,6 +768,67 @@ describe("project-index freshness through registered tools", () => {
     const refreshed = await executeRefresh(root, { force: true });
 
     expect(resultText(refreshed)).toContain("refreshed: true");
+  });
+});
+
+describe("project-index affected tests", () => {
+  test("selects direct and transitive runnable tests without unrelated tests or helpers", async () => {
+    const root = await fixture({
+      "src/value.ts": 'export { bridge } from "./bridge"; export const value = 2;',
+      "src/bridge.ts": 'import { value } from "./value"; export const bridge = value;',
+      "tests/direct.test.ts": 'import { value } from "../src/value";',
+      "tests/underscore_test.ts": 'import { value } from "../src/value";',
+      "tests/transitive.spec.ts": 'import { bridge } from "@/bridge";',
+      "tests/helper.ts": 'import { value } from "../src/value";',
+      "tests/unrelated.test.ts": "export const unrelated = true;",
+    });
+    expect(await findAffectedTests(root, ["src/value.ts", "src/bridge.ts"])).toEqual({
+      tests: ["tests/direct.test.ts", "tests/transitive.spec.ts", "tests/underscore_test.ts"],
+      complete: true,
+      reasons: [],
+    });
+  });
+
+  test("includes edited test files and returns an empty selection for unused source", async () => {
+    const root = await fixture({
+      "src/unused.ts": "export const unused = true;",
+      "tests/edited.test.ts": "export const changed = true;",
+    });
+    expect(await findAffectedTests(root, ["tests/edited.test.ts", "tests/edited.test.ts"])).toEqual({
+      tests: ["tests/edited.test.ts"], complete: true, reasons: [],
+    });
+    expect(await findAffectedTests(root, ["src/unused.ts"])).toEqual({
+      tests: [], complete: true, reasons: [],
+    });
+  });
+
+  test("reconciles changed imports and does not apply the impact display limit", async () => {
+    const files: Record<string, string> = {
+      "src/value.ts": "export const value = 2;",
+      "src/other.ts": "export const other = 1;",
+    };
+    const tests = Array.from({ length: 35 }, (_, index) => `tests/value-${String(index).padStart(2, "0")}.test.ts`);
+    for (const file of tests) files[file] = 'import { value } from "../src/value";';
+    const root = await fixture(files);
+    expect((await findAffectedTests(root, ["src/value.ts"])).tests).toEqual(tests);
+    await writeFile(path.join(root, tests[0]!), 'import { other } from "../src/other";');
+    expect((await findAffectedTests(root, ["src/value.ts"])).tests).toEqual(tests.slice(1));
+  });
+
+  test("reports unindexed edited files instead of claiming complete coverage", async () => {
+    const root = await fixture({ "src/value.ts": "export const value = 2;" });
+    expect(await findAffectedTests(root, ["src/missing.ts"])).toEqual({
+      tests: [], complete: false, reasons: ["unindexed:src/missing.ts"],
+    });
+  });
+
+  test("rejects cancelled test selection", async () => {
+    const root = await fixture({ "src/value.ts": "export const value = 2;" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(findAffectedTests(root, ["src/value.ts"], controller.signal)).rejects.toThrow(
+      "Project index operation aborted.",
+    );
   });
 });
 

@@ -4,7 +4,7 @@ import { stripVTControlCharacters as stripAnsi } from "node:util";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import contextSummaryFooter from "../context-summary-footer";
 
-test("renders one branch label in the footer and preserves the complete PR hyperlink", async () => {
+test("puts the branch label before the directory and links the complete PR label", async () => {
   const handlers = new Map<string, (event: never, ctx: ExtensionContext) => unknown>();
   const components: Component[] = [];
   const label =
@@ -50,11 +50,11 @@ test("renders one branch label in the footer and preserves the complete PR hyper
     const row = components[0]!.render(160)[0]!;
     expect(row).toContain(label);
     expect(stripAnsi(row).replace(/\s+/g, " ").trim()).toBe(
-      "/project #1089 footer (origin) session-id",
+      "#1089 footer (origin) /project session-id",
     );
     statuses.set("branch-pr", "[No PR] footer");
     expect(stripAnsi(components[0]!.render(160)[0]!).replace(/\s+/g, " ").trim()).toBe(
-      "/project [No PR] footer session-id",
+      "[No PR] footer /project session-id",
     );
   } finally {
     await handlers.get("session_shutdown")!({} as never, ctx);

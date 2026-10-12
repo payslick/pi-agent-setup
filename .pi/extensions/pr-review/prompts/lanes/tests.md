@@ -31,7 +31,7 @@ When tools are enabled, do not inspect testing guides, nearby tests, `tests/util
 
 - New or changed business rules, calculations, transformations, permissions, validation, tenant isolation, persisted state, rollback, retries, async ordering, and error recovery.
 - Assertions distinguish the intended result from realistic wrong results instead of proving only that code ran or returned a value.
-- Tests treat the database as a black box: they change and inspect application state through existing APIs or controllers, never through direct database access.
+- Ordinary behavior tests treat the database as a black box: they change and inspect application state through existing APIs or controllers. Builder unit tests may inspect the database directly to verify the setup state and relationships they persist.
 - Builders are the only test utilities allowed to access the database directly, and tests use them only to create initial application state.
 - Before adding a builder, inspect the existing builders and reuse or extend one when it already supports the required state.
 - New builders are tested and provide sensible default values so their API requires only scenario-specific inputs.

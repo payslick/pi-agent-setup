@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { DEFAULT_ACCESS_MODE, setAccessMode } from "../access-mode/state";
+import {
+  clearAccessProjectRoot,
+  DEFAULT_ACCESS_MODE,
+  initializeAccessProjectRoot,
+  setAccessMode,
+} from "../access-mode/state";
 import bashGuard, { analyzeBashCommand, replaceSearchCommand } from "../bash-guard";
 
 type BashToolCall = {
@@ -10,7 +18,7 @@ type BashToolCall = {
   input: { action?: "read" | "write"; purpose?: string; command: string };
 };
 
-function registerBashGuard(): (event: BashToolCall) => Promise<unknown> {
+function registerBashGuard(cwd = process.cwd()): (event: BashToolCall) => Promise<unknown> {
   let toolCall: ((event: BashToolCall, ctx: { cwd: string }) => Promise<unknown>) | undefined;
   bashGuard({
     on(event: string, handler: (...args: unknown[]) => unknown) {
@@ -20,7 +28,27 @@ function registerBashGuard(): (event: BashToolCall) => Promise<unknown> {
   } as unknown as ExtensionAPI);
   if (!toolCall) throw new Error("bash guard did not register correctly");
   const handler = toolCall;
-  return (event) => handler(event, { cwd: process.cwd() });
+  return (event) => handler(event, { cwd });
+}
+
+async function withBashWorkspace(
+  run: (workspace: { root: string; cwd: string; outside: string }) => Promise<void>,
+) {
+  const directory = await mkdtemp(path.join(tmpdir(), "bash-guard-"));
+  const root = path.join(directory, "workspace");
+  const cwd = path.join(root, "pi");
+  const outside = path.join(directory, "outside");
+  try {
+    await mkdir(cwd, { recursive: true });
+    await mkdir(outside);
+    await writeFile(path.join(root, ".piroot"), "");
+    clearAccessProjectRoot();
+    initializeAccessProjectRoot(cwd);
+    await run({ root, cwd, outside });
+  } finally {
+    clearAccessProjectRoot();
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 afterEach(() => setAccessMode(DEFAULT_ACCESS_MODE));
@@ -53,7 +81,103 @@ describe("bash search rewriting", () => {
   });
 });
 
+describe("bash && command validation", () => {
+  test("reports the first blocked command rather than a later rule category", () => {
+    expect(
+      analyzeBashCommand("node --eval 'console.log(1)' && cat ../secret.txt", 3),
+    ).toMatchObject({ rule: "ad-hoc-script" });
+  });
+
+  test.each(["'&&'", '"&&"', "\\&\\&"])(
+    "keeps literal %s inside its command arguments",
+    (literal) => {
+      expect(
+        analyzeBashCommand(`printf '%s' ${literal} node --eval harmless && git status`, 3),
+      ).toBeNull();
+    },
+  );
+
+  test("preserves literal && patterns when rewriting chained searches", () => {
+    expect(replaceSearchCommand("grep '&&' .pi && git status")).toEqual({
+      command: "rg '&&' .pi && git status",
+    });
+  });
+
+  test("checks a command's paths before evaluating the next command", async () => {
+    await withBashWorkspace(async ({ cwd, outside }) => {
+      await symlink(outside, path.join(cwd, ".pi"));
+      setAccessMode(3);
+
+      expect(
+        await registerBashGuard(cwd)({
+          toolName: "bash",
+          toolCallId: "bash-chain-path-first",
+          input: {
+            action: "read",
+            purpose: "Check chained command boundaries",
+            command: "git status .pi && bun run dev",
+          },
+        }),
+      ).toMatchObject({
+        block: true,
+        reason: expect.stringContaining('Rejected Bash path: ".pi"'),
+      });
+    });
+  });
+
+  test("validates later commands without changing an allowed chain", async () => {
+    await withBashWorkspace(async ({ cwd }) => {
+      await mkdir(path.join(cwd, ".pi"));
+      setAccessMode(3);
+      const input = {
+        action: "write" as const,
+        purpose: "Publish Pi setup changes",
+        command: 'git add .gitignore .pi && git commit -m "Update setup" && git push origin HEAD',
+      };
+      const command = input.command;
+      const call = registerBashGuard(cwd);
+
+      expect(
+        await call({ toolName: "bash", toolCallId: "bash-chain-allowed", input }),
+      ).toBeUndefined();
+      expect(input.command).toBe(command);
+      expect(
+        await call({
+          toolName: "bash",
+          toolCallId: "bash-chain-blocked",
+          input: { ...input, command: `${command} && node --eval 'console.log(1)'` },
+        }),
+      ).toMatchObject({
+        block: true,
+        reason: expect.stringContaining("ad hoc interpreter scripts"),
+      });
+    });
+  });
+});
+
 describe("bash ad hoc script guard", () => {
+  test("allows named Bun scripts to receive temporary input paths", () => {
+    expect(
+      analyzeBashCommand(
+        "bun run check:type-aware --no-ignore " +
+          "tmp/alerts-ci-913-fix/tests/e2e/alerts.test.ts " +
+          "tmp/alerts-ci-913-fix/tests/unit/services/alert-checks/drain.test.ts",
+        3,
+      ),
+    ).toBeNull();
+  });
+
+  test("blocks executing temporary scripts through bun run", () => {
+    for (const command of [
+      "bun run tmp/replacement.ts",
+      "bun run --silent tmp/replacement.ts",
+      "bun run .pi/tmp/replacement.ts",
+      "bun run temp/replacement.ts input.txt",
+    ]) {
+      expect(analyzeBashCommand(command, 3)).toMatchObject({ rule: "ad-hoc-script" });
+    }
+  });
+
   test("blocks inline code and interpreter stdin across languages", () => {
     for (const command of [
       "python3 -c 'print(1)'",
@@ -127,7 +251,71 @@ describe("bash ad hoc script guard", () => {
   });
 });
 
+describe("Herdr worker Bash isolation", () => {
+  test("blocks direct or wrapped Herdr orchestration only for workers", () => {
+    for (const command of [
+      "herdr agent start --name child pane -- pi",
+      "env DEBUG=1 herdr tab create workspace",
+      "command /usr/local/bin/herdr agent list",
+    ]) {
+      expect(analyzeBashCommand(command, 4, { isSubagent: true })).toMatchObject({
+        rule: "herdr-orchestration",
+      });
+    }
+    expect(analyzeBashCommand("herdr agent list", 4)).toBeNull();
+  });
+});
+
 describe("bash guard access modes", () => {
+  test.each([2, 3] as const)(
+    "allows staging cwd-local .pi beneath the project root in mode %i",
+    async (mode) => {
+      await withBashWorkspace(async ({ root, cwd, outside }) => {
+        await mkdir(path.join(cwd, ".pi"));
+        await symlink(outside, path.join(root, ".pi"));
+        setAccessMode(mode);
+
+        expect(
+          await registerBashGuard(cwd)({
+            toolName: "bash",
+            toolCallId: "bash-local-pi",
+            input: {
+              action: "write",
+              purpose: "Stage Pi setup changes",
+              command: "git add .gitignore .pi",
+            },
+          }),
+        ).toBeUndefined();
+      });
+    },
+  );
+
+  test.each([1, 2, 3] as const)(
+    "blocks cwd-local .pi symlinks escaping the project root in mode %i",
+    async (mode) => {
+      await withBashWorkspace(async ({ root, cwd, outside }) => {
+        await mkdir(path.join(root, ".pi"));
+        await symlink(outside, path.join(cwd, ".pi"));
+        setAccessMode(mode);
+
+        expect(
+          await registerBashGuard(cwd)({
+            toolName: "bash",
+            toolCallId: "bash-escaping-pi",
+            input: {
+              action: "read",
+              purpose: "Inspect Pi setup changes",
+              command: "git status --short .pi",
+            },
+          }),
+        ).toMatchObject({
+          block: true,
+          reason: expect.stringContaining('Rejected Bash path: ".pi"'),
+        });
+      });
+    },
+  );
+
   test("uses the self-reported action in modes 1 and 2", async () => {
     const toolCall = registerBashGuard();
     const call = (action?: "read" | "write") =>

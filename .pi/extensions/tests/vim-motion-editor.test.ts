@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteProvider, EditorTheme, TUI } from "@earendil-works/pi-tui";
+import {
+  matchesKey,
+  type AutocompleteProvider,
+  type EditorTheme,
+  type TUI,
+} from "@earendil-works/pi-tui";
 
 import { VimMotionEditor } from "../vim-motion/editor";
 
@@ -13,7 +18,11 @@ function createEditor(
 ): VimMotionEditor {
   const tui = { requestRender() {} } as unknown as TUI;
   const theme = { borderColor: (value: string) => value } as unknown as EditorTheme;
-  const keybindings = { matches: () => false } as unknown as KeybindingsManager;
+  const keybindings = {
+    matches: (data, action) =>
+      (action === "app.message.followUp" && matchesKey(data, "alt+enter")) ||
+      (action === "app.message.dequeue" && matchesKey(data, "alt+up")),
+  } as KeybindingsManager;
   return new VimMotionEditor(
     tui,
     theme,
@@ -27,6 +36,53 @@ function createEditor(
 }
 
 describe("VimMotionEditor", () => {
+  test.each(["insert", "normal"])(
+    "Option+Down submits successive drafts through follow-up in %s mode",
+    (mode) => {
+      const editor = createEditor();
+      const followUps: string[] = [];
+      const steering: string[] = [];
+      editor.onAction("app.message.followUp", () => {
+        followUps.push(editor.getExpandedText());
+        editor.setText("");
+      });
+      editor.onSubmit = (text) => steering.push(text);
+      editor.setText("Review the changes");
+      if (mode === "normal") editor.handleInput("\x1b");
+
+      editor.handleInput("\x1b[1;3B");
+      expect(editor.getText()).toBe("");
+      editor.handleInput("Then run the tests");
+      editor.handleInput("\x1b[1;3B");
+
+      expect(followUps).toEqual(["Review the changes", "Then run the tests"]);
+      expect(steering).toEqual([]);
+      expect(editor.getText()).toBe("");
+    },
+  );
+
+  test("keeps Enter steering, Option+Enter follow-up, and Option+Up queue editing", () => {
+    const editor = createEditor();
+    const submitted: { delivery: string; text: string }[] = [];
+    editor.onSubmit = (text) => submitted.push({ delivery: "steering", text });
+    editor.onAction("app.message.followUp", () => {
+      submitted.push({ delivery: "followUp", text: editor.getText() });
+      editor.setText("");
+    });
+    editor.onAction("app.message.dequeue", () => editor.setText("Queued draft"));
+
+    editor.setText("Change direction");
+    editor.handleInput("\r");
+    editor.setText("Do this later");
+    editor.handleInput("\x1b\r");
+    editor.handleInput("\x1b[1;3A");
+
+    expect(submitted).toEqual([
+      { delivery: "steering", text: "Change direction" },
+      { delivery: "followUp", text: "Do this later" },
+    ]);
+    expect(editor.getText()).toBe("Queued draft");
+  });
   test("delegates complete prefix sequences before insert or normal mode handles them", () => {
     let prefixActive = false;
     const prefixInputs: string[] = [];

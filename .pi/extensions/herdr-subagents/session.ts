@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { SpawnedSubagentRecord, SubagentDoneEvent, SubagentUsageStats } from "./state";
 
 interface SessionContentPart {
@@ -31,6 +32,9 @@ interface SessionEntry {
   type?: string;
   message?: SessionMessage;
 }
+
+export const sessionIdFromPath = (sessionPath: string): string | undefined =>
+  path.basename(sessionPath).match(/_([0-9a-f]{8}-[0-9a-f-]{27,})\.jsonl$/i)?.[1];
 
 const numberValue = (value: number | undefined): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;

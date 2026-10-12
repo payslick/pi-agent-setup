@@ -80,30 +80,30 @@ describe("access mode tool policy", () => {
     "get_data",
     "write",
     "multi-edit",
+    "submit_checkpoint",
+    "submit_handoff",
     "bash",
     "debug_ui_start",
     "custom-tool",
   ];
 
-  test("blocks only the direct read tool in mode 3", () => {
-    expect(filterToolsForAccessMode(tools, 1)).toEqual([
-      "read",
-      "read-many-files-lines",
-      "bash",
-    ]);
+  test("filters tools by mode and excludes standalone write below mode 4", () => {
+    expect(filterToolsForAccessMode(tools, 1)).toEqual(["read", "read-many-files-lines", "bash"]);
     expect(filterToolsForAccessMode(tools, 2)).toEqual([
       "read",
       "read-many-files-lines",
       "get_data",
-      "write",
       "multi-edit",
+      "submit_checkpoint",
+      "submit_handoff",
       "bash",
     ]);
     expect(filterToolsForAccessMode(tools, 3)).toEqual([
       "read-many-files-lines",
       "get_data",
-      "write",
       "multi-edit",
+      "submit_checkpoint",
+      "submit_handoff",
       "bash",
       "debug_ui_start",
     ]);
@@ -115,9 +115,16 @@ describe("access mode tool policy", () => {
     expect(isToolAllowed("read", 4)).toBe(true);
     expect(isToolAllowed("read-many-files-lines", 4)).toBe(true);
     expect(isToolAllowed("write", 1)).toBe(false);
-    expect(isToolAllowed("write", 2)).toBe(true);
+    expect(isToolAllowed("write", 2)).toBe(false);
+    expect(isToolAllowed("write", 3)).toBe(false);
+    expect(isToolAllowed("write", 4)).toBe(true);
+    expect(isToolAllowed("submit_checkpoint", 2)).toBe(true);
+    expect(isToolAllowed("submit_handoff", 3)).toBe(true);
     expect(isToolAllowed("debug_ui_start", 2)).toBe(false);
     expect(isToolAllowed("debug_ui_start", 3)).toBe(true);
+    expect(isToolAllowed("herdr_spawn_agents", 3, true)).toBe(false);
+    expect(isToolAllowed("herdr_manage_agents", 4, true)).toBe(false);
+    expect(isToolAllowed("herdr_spawn_agents", 3, false)).toBe(true);
   });
 
   test("allows unknown tools only in mode 4", () => {
@@ -181,6 +188,73 @@ describe("access mode prompt", () => {
 });
 
 describe("access mode extension enforcement", () => {
+  test("checks project boundaries for every flat multi-edit key", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "access-mode-map-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "access-mode-map-outside-"));
+    temporaryPaths.add(root);
+    temporaryPaths.add(outside);
+    await symlink(outside, path.join(root, "escape"));
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    accessModeExtension({
+      on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
+    } as unknown as ExtensionAPI);
+    const ctx = { cwd: root } as ExtensionContext;
+    const call = (input: Record<string, string>) =>
+      handlers.get("tool_call")?.({ toolName: "multi-edit", toolCallId: "map-access", input }, ctx);
+
+    for (const mode of [2, 3] as const) {
+      setAccessMode(mode);
+      expect(await call({ "inside.txt:1-2": "edited", "new.txt": "created" })).toBeUndefined();
+      for (const key of ["escape/new.txt", "escape/existing.txt:1-2", "escape/existing.txt:2-"]) {
+        expect(await call({ "inside.txt:1-1": "allowed", [key]: "blocked" })).toMatchObject({
+          block: true,
+        });
+      }
+    }
+    setAccessMode(4);
+    expect(await call({ [path.join(outside, "existing.txt:2-")]: "allowed" })).toBeUndefined();
+  });
+
+  test("checks worker ownership for create, bounded, and open-ended map keys even in mode 4", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "access-mode-owned-map-"));
+    temporaryPaths.add(root);
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    accessModeExtension({
+      on: (event: string, handler: (...args: unknown[]) => unknown) => handlers.set(event, handler),
+    } as unknown as ExtensionAPI);
+    const ctx = { cwd: root } as ExtensionContext;
+    const originalEnvironment = {
+      PI_SUBAGENT_ID: process.env.PI_SUBAGENT_ID,
+      PI_AGENT_WRITABLE_FILES: process.env.PI_AGENT_WRITABLE_FILES,
+    };
+    try {
+      process.env.PI_SUBAGENT_ID = "map-worker";
+      process.env.PI_AGENT_WRITABLE_FILES = JSON.stringify(["owned.txt"]);
+      setAccessMode(4);
+      for (const suffix of ["", ":1-2", ":2-"]) {
+        const call = (file: string) =>
+          handlers.get("tool_call")?.(
+            {
+              toolName: "multi-edit",
+              toolCallId: "map-ownership",
+              input: { [`${file}${suffix}`]: "replacement" },
+            },
+            ctx,
+          );
+        expect(await call("owned.txt")).toBeUndefined();
+        expect(await call("unowned.txt")).toMatchObject({
+          block: true,
+          reason: expect.stringContaining("not in this Herdr worker's writableFiles"),
+        });
+      }
+    } finally {
+      for (const [key, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("updates active tools and blocks disallowed calls immediately", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "access-mode-extension-"));
     temporaryPaths.add(root);
@@ -249,7 +323,6 @@ describe("access mode extension enforcement", () => {
       "read-many-files-lines",
       "grep",
       "get_data",
-      "write",
       "multi-edit",
       "bash",
     ]);
@@ -273,7 +346,6 @@ describe("access mode extension enforcement", () => {
       "read-many-files-lines",
       "grep",
       "get_data",
-      "write",
       "multi-edit",
       "bash",
       "debug_ui_start",
@@ -301,6 +373,22 @@ describe("access mode extension enforcement", () => {
       ctx,
     );
     expect(allowed).toBeUndefined();
+
+    for (const mode of [1, 2, 3, 4, 3] as const) {
+      setAccessMode(mode);
+      expect(activeTools.includes("write")).toBe(mode === 4);
+      expect(activeTools.includes("multi-edit")).toBe(mode >= 2);
+      const writeResult = await handlers.get("tool_call")?.(
+        {
+          toolName: "write",
+          input: { path: "inside.txt", content: "value" },
+          toolCallId: `write-${mode}`,
+        },
+        ctx,
+      );
+      if (mode === 4) expect(writeResult).toBeUndefined();
+      else expect(writeResult).toMatchObject({ block: true });
+    }
 
     handlers.get("session_shutdown")?.({}, ctx);
   });

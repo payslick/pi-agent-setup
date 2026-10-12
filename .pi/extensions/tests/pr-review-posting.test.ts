@@ -115,7 +115,7 @@ describe("pr review comment posting", () => {
     const result = prepareDryRunPosting({
       findings: [
         finding({ id: "dedupe", laneId: "dedupe" }),
-        finding({ id: "security", laneId: "security-api" }),
+        finding({ id: "security", laneId: "api-safety" }),
       ],
       issueConsolidations: [
         {
@@ -128,7 +128,7 @@ describe("pr review comment posting", () => {
     });
 
     expect(result.drafts).toHaveLength(1);
-    expect(result.drafts[0]?.body).toEndWith("[dedupe, security - gpt-5.6-sol]");
+    expect(result.drafts[0]?.body).toEndWith("[api-safety, dedupe - gpt-5.6-sol]");
   });
 
   test("keeps consolidated findings at different locations separate", () => {
@@ -137,7 +137,7 @@ describe("pr review comment posting", () => {
         finding({ id: "dedupe", laneId: "dedupe" }),
         finding({
           id: "security",
-          laneId: "security-api",
+          laneId: "api-safety",
           location: { filePath: "src/save.ts", line: 20 },
         }),
       ],
@@ -153,7 +153,7 @@ describe("pr review comment posting", () => {
 
     expect(result.drafts.map(({ body }) => body.split("\n").at(-1))).toEqual([
       "[dedupe - gpt-5.6-sol]",
-      "[security - gpt-5.6-sol]",
+      "[api-safety - gpt-5.6-sol]",
     ]);
   });
 

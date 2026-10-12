@@ -1,14 +1,13 @@
 import path from "node:path";
-import { SUBAGENT_PROFILE_NAMES, type SubagentSpec } from "./schemas";
+import {
+  IMPLEMENTATION_PROFILE_NAMES,
+  SUBAGENT_PROFILE_NAMES,
+  type SubagentSpec,
+} from "./schemas";
 import type { SpawnedSubagentRecord } from "./state";
 
 const MAX_CONCURRENT_IMPLEMENTERS = 2;
-const IMPLEMENTATION_PROFILES = new Set([
-  "frontend-implementer",
-  "backend-implementer",
-  "unit-test-implementer",
-  "e2e-test-implementer",
-]);
+const IMPLEMENTATION_PROFILES = new Set<string>(IMPLEMENTATION_PROFILE_NAMES);
 const KNOWN_PROFILES = new Set<string>(SUBAGENT_PROFILE_NAMES);
 
 interface Ownership {
@@ -81,8 +80,12 @@ export function validateImplementationAssignments(
   const requested = specs
     .map((spec) => profileOwnership(spec, projectRoot))
     .filter((assignment): assignment is Ownership => Boolean(assignment));
+  const inactiveStatuses = new Set(["succeeded", "failed", "aborted", "missing"]);
   const activeImplementers = activeRecords.filter(
-    (record) => record.profile && IMPLEMENTATION_PROFILES.has(record.profile),
+    (record) =>
+      record.profile &&
+      IMPLEMENTATION_PROFILES.has(record.profile) &&
+      !inactiveStatuses.has(record.lifecycleStatus ?? "working"),
   );
   const requestedImplementers = requested.filter((assignment) => assignment.implementation);
   if (activeImplementers.length + requestedImplementers.length > MAX_CONCURRENT_IMPLEMENTERS) {
@@ -93,6 +96,7 @@ export function validateImplementationAssignments(
 
   const contractOwnerByFile = new Map<string, string>();
   for (const record of activeRecords) {
+    if (inactiveStatuses.has(record.lifecycleStatus ?? "working")) continue;
     for (const file of record.contractFiles ?? []) contractOwnerByFile.set(file, record.name);
   }
   for (const assignment of requested) {
@@ -101,6 +105,7 @@ export function validateImplementationAssignments(
 
   const writeOwnerByFile = new Map<string, string>();
   for (const record of activeRecords) {
+    if (inactiveStatuses.has(record.lifecycleStatus ?? "working")) continue;
     for (const file of record.writableFiles ?? []) {
       const contractOwner = contractOwnerByFile.get(file);
       if (contractOwner) throw new Error(`${file} is a contract owned by ${contractOwner}.`);

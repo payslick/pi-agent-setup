@@ -162,11 +162,17 @@ export function formatCiStatusLine(ciStatus) {
 export function buildReviewSkillCoverage(input) {
   const hasUiChanges = input.prData.files.some((file) => isUiPath(file.path));
   const routedLaneIds = new Set(input.lanes.map((lane) => lane.laneId));
-  const successfulLaneIds = new Set(
-    input.agentResults.filter((result) => !result.error).map((result) => result.laneId),
-  );
-  const laneItem = (laneId, label) =>
-    laneCoverageItem(laneId, label, routedLaneIds, successfulLaneIds, input.noAgents);
+  const resultsByLane = new Map(input.agentResults.map((result) => [result.laneId, result]));
+  const coverageLanes = new Map([
+    ...input.agentResults.map((result) => [result.laneId, result.laneId]),
+    ...input.lanes.map((lane) => [lane.laneId, lane.title]),
+    ["pr-metadata", "PR metadata policy"],
+    ["dedupe", "Dedupe/reuse search"],
+    ["api-safety", "API safety"],
+    ["code-quality", "Code quality agent"],
+    ["docs", "Docs agent"],
+    ["tests", "Tests review"],
+  ]);
   return {
     items: [
       {
@@ -191,26 +197,15 @@ export function buildReviewSkillCoverage(input) {
       },
       {
         id: "changed-files",
-        label: "Changed files and diff context",
-        status: input.prData.hunks.length ? "partial" : "missing",
-        details: input.prData.hunks.length
-          ? "Lane agents receive parsed diff hunks; full changed-file snapshots are not yet attached."
-          : "No diff hunk data available.",
+        label: "Diff context",
+        status: input.prData.diffContext ? "complete" : "missing",
+        details: input.prData.diffContext
+          ? `${input.prData.diffContext.changes.length} change range(s) indexed in ${input.prData.diffContext.path}. Local branch and commit verified; working tree clean. Drizzle directories excluded.`
+          : "No validated diff index available.",
       },
-      laneItem("pr-metadata", "PR metadata policy"),
-      laneItem("dedupe", "Dedupe/reuse search"),
-      laneItem("api-safety", "API safety agent"),
-      laneItem("code-quality", "Code quality agent"),
-      laneItem("docs", "Docs agent"),
-      laneItem("tests", "Tests review"),
-      {
-        id: "ui-testing",
-        label: "Conditional live UI testing",
-        status: hasUiChanges ? "missing" : "not-applicable",
-        details: hasUiChanges
-          ? "Static UX lane may run, but exploratory/browser agents are not launched by this extension yet."
-          : "No UI files detected in the changed file list.",
-      },
+      ...Array.from(coverageLanes, ([laneId, label]) =>
+        laneCoverageItem(laneId, label, routedLaneIds, resultsByLane, input.noAgents),
+      ),
       {
         id: "approval-gate",
         label: "Approval before posting",
@@ -224,8 +219,8 @@ export function buildReviewSkillCoverage(input) {
   };
 }
 
-function laneCoverageItem(laneId, label, routedLaneIds, successfulLaneIds, noAgents) {
-  if (!routedLaneIds.has(laneId))
+function laneCoverageItem(laneId, label, routedLaneIds, resultsByLane, noAgents) {
+  if (!routedLaneIds.has(laneId) && !resultsByLane.has(laneId))
     return {
       id: laneId,
       label,
@@ -233,7 +228,8 @@ function laneCoverageItem(laneId, label, routedLaneIds, successfulLaneIds, noAge
       details: "Lane was not routed for this diff.",
     };
   if (noAgents) return { id: laneId, label, status: "skipped", details: "Skipped by --no-agents." };
-  if (successfulLaneIds.has(laneId))
+  const result = resultsByLane.get(laneId);
+  if (result && !result.error)
     return {
       id: laneId,
       label,
@@ -243,8 +239,8 @@ function laneCoverageItem(laneId, label, routedLaneIds, successfulLaneIds, noAge
   return {
     id: laneId,
     label,
-    status: "partial",
-    details: "Lane was routed but failed or was omitted.",
+    status: "failed",
+    details: result?.error || "Lane did not return a result.",
   };
 }
 

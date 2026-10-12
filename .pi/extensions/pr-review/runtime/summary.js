@@ -144,6 +144,8 @@ function renderCoverageSection(coverage) {
 function coverageStatusLabel(status) {
   const labels = {
     covered: "✅ covered",
+    complete: "✅ Complete",
+    failed: "❌ Failed",
     partial: "◐ partial",
     skipped: "⏭️ skipped",
     missing: "❌ missing",

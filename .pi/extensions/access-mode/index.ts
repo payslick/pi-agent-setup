@@ -21,6 +21,8 @@ import {
   isToolAllowed,
   toolCapability,
 } from "./tool-policy";
+import { assertWorkerWriteOwnership, workerHasWriteOwnership } from "./worker-ownership";
+import { parseMultiEditKey } from "../multi-edit/input";
 
 export const ACCESS_MODE_STATUS_KEY = "access-mode";
 const PROMPT_START = "<!-- pi-access-mode:start -->";
@@ -32,9 +34,9 @@ function modeInstructions(mode: AccessMode): string {
       case 1:
         return "Use direct read/search/index/web tools and Bash self-reported as read. get_data, writes, write-action Bash, browser mutation, screenshots, and subagents are blocked.";
       case 2:
-        return "Direct reads, get_data, file writes, and Bash self-reported as read or write are allowed. Other process/browser execution and subagents are blocked.";
+        return "Direct reads, get_data, multi-edit, and Bash self-reported as read or write are allowed. Standalone write and edit tools are disabled; use multi-edit for file edits. Other process/browser execution and subagents are blocked.";
       case 3:
-        return "Known write, execute, read-many-files-lines, search, index, web, and log tools are allowed, but parent read is blocked; use get_data when requested data must be located through searching or reasoning. Structured paths and explicit shell path arguments are project-scoped.";
+        return "Known write, execute, read-many-files-lines, search, index, web, and log tools are allowed, except standalone write and edit tools are disabled; use multi-edit for file edits; parent read is blocked; use get_data when requested data must be located through searching or reasoning. Structured paths and explicit shell path arguments are project-scoped.";
       case 4:
         return "All registered tools and host filesystem paths are allowed, subject to OS permissions and non-path safety guards.";
     }
@@ -97,14 +99,8 @@ function pathInputs(event: ToolCallEvent): string[] {
         ...(typeof input.root === "string" ? [input.root] : ["."]),
         ...(typeof input.file === "string" ? [input.file] : []),
       ];
-    case "multi-edit": {
-      const files = Array.isArray(input.files) ? input.files : [];
-      return files.flatMap((file) => {
-        if (!file || typeof file !== "object") return [];
-        const filePath = (file as { path?: unknown }).path;
-        return typeof filePath === "string" ? [filePath] : [];
-      });
-    }
+    case "multi-edit":
+      return Object.keys(input).map((key) => parseMultiEditKey(key).path);
     default:
       return [];
   }
@@ -130,9 +126,28 @@ async function accessModeBlock(
     };
   }
 
+  const projectRoot = getAccessProjectRoot(ctx.cwd);
+  const action = (event.input as { action?: unknown }).action;
+  if (event.toolName === "bash" && action === "write" && workerHasWriteOwnership()) {
+    return {
+      block: true,
+      reason:
+        "Herdr workers with file ownership cannot use write-action Bash. Use write or multi-edit so writableFiles can be enforced.",
+    };
+  }
+  if (["edit", "write", "multi-edit"].includes(event.toolName)) {
+    try {
+      for (const filePath of pathInputs(event))
+        assertWorkerWriteOwnership(projectRoot, ctx.cwd, filePath);
+    } catch (error) {
+      return {
+        block: true,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   if (mode === 4) return undefined;
   try {
-    const projectRoot = getAccessProjectRoot(ctx.cwd);
     for (const filePath of pathInputs(event))
       await assertProjectPath(projectRoot, resolveAccessPath(ctx.cwd, filePath), mode);
   } catch {

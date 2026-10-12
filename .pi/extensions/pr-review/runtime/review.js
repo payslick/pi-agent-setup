@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { fetchLocalData, fetchPrData, fetchPrReviewComments, resolvePrNumber } from "./github.js";
+import { fetchPrReviewComments, resolvePrNumber } from "./github.js";
+import { fetchLocalMetadata, fetchPrMetadata } from "../github.ts";
+import { prepareReviewDiff } from "../diff-context.ts";
 import { routeReviewLanes } from "./lanes.js";
 import {
   filterReviewFiles,
@@ -72,9 +74,16 @@ function parseReviewCommandOptions(args) {
 }
 
 async function loadReviewTarget(pi, ctx, local, positionalArguments) {
-  if (local) return fetchLocalData(pi.exec, ctx.cwd, positionalArguments[0] || "origin/main");
-  const prNumber = await resolvePrNumber(pi.exec, ctx.cwd, positionalArguments[0]);
-  return fetchPrData(pi.exec, ctx.cwd, prNumber);
+  const prNumber = local ? 0 : await resolvePrNumber(pi.exec, ctx.cwd, positionalArguments[0]);
+  const metadata = local
+    ? await fetchLocalMetadata(pi.exec, ctx.cwd, positionalArguments[0] || "origin/main")
+    : await fetchPrMetadata(pi.exec, ctx.cwd, prNumber);
+  const { context: diffContext, ...diff } = await prepareReviewDiff(pi.exec, ctx.cwd, {
+    branch: metadata.head.ref,
+    headSha: metadata.head.sha,
+    baseSha: metadata.base.sha,
+  });
+  return { prNumber, metadata, ...diff, diffContext };
 }
 
 async function fetchExistingReviewComments(pi, ctx, local, prNumber) {
@@ -94,12 +103,7 @@ function filterReviewData(prData) {
   };
 }
 
-export async function runReviewAgentSafely(
-  laneId,
-  operation,
-  onError,
-  recoverFindings,
-) {
+export async function runReviewAgentSafely(laneId, operation, onError, recoverFindings) {
   try {
     return await operation();
   } catch (error) {
@@ -126,7 +130,11 @@ async function runReviewAgents(pi, ctx, input) {
     let agentResults = input.noAgents
       ? input.lanes.map((lane) => {
           progress.update(lane.laneId, "skipped");
-          return { laneId: lane.laneId, findings: [], error: "review agents skipped (--no-agents)" };
+          return {
+            laneId: lane.laneId,
+            findings: [],
+            error: "review agents skipped (--no-agents)",
+          };
         })
       : await Promise.all(
           input.lanes.map((lane) =>
@@ -141,8 +149,7 @@ async function runReviewAgents(pi, ctx, input) {
                   input.sharedArtifacts,
                   (phase, details) => progress.update(lane.laneId, phase, details),
                 ),
-              (_message, findingCount) =>
-                progress.update(lane.laneId, "error", { findingCount }),
+              (_message, findingCount) => progress.update(lane.laneId, "error", { findingCount }),
               () =>
                 readPartialReviewFindings(
                   path.join(ctx.cwd, getLaneDir(ctx, lane.laneId), "partial-findings.jsonl"),
@@ -156,13 +163,7 @@ async function runReviewAgents(pi, ctx, input) {
       const ciResult = await runReviewAgentSafely(
         "ci-analysis",
         () =>
-          runCiAnalysisLaneAgent(
-            pi,
-            ctx,
-            input.prData.metadata,
-            ciStatus,
-            input.sharedArtifacts,
-          ),
+          runCiAnalysisLaneAgent(pi, ctx, input.prData.metadata, ciStatus, input.sharedArtifacts),
         undefined,
         () =>
           readPartialReviewFindings(
@@ -183,7 +184,12 @@ export async function runReviewCommand(pi, ctx, args, local) {
   setStatus(ctx, "⏳:loading");
   showWidget(ctx, [local ? "Preparing local review…" : "Preparing PR review…"]);
   const prData = filterReviewData(
-    await loadReviewTarget(pi, ctx, local, options.positionalArguments),
+    await loadReviewTarget(pi, ctx, local, options.positionalArguments).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(ctx, "❌:stopped");
+      showWidget(ctx, [message]);
+      throw error;
+    }),
   );
   if (!local) await prefixTmuxWindowTitleWithPrNumber(pi, ctx, prData.prNumber);
   const existingComments = await fetchExistingReviewComments(pi, ctx, local, prData.prNumber);
@@ -454,9 +460,7 @@ function progressCell(lane, entry, titleWidth, timeout, inactivityTimeout, now) 
   const phase = entry.phase.padEnd(10);
   const elapsed = entry.startedAt ? elapsedLabel(progressElapsed(entry, now)) : "--:--";
   const messageCount = entry.messageCount ?? (entry.sessionPath ? 0 : "—");
-  const activity = MESSAGE_COUNT_PHASES.has(entry.phase)
-    ? `${elapsed}(${messageCount})`
-    : elapsed;
+  const activity = MESSAGE_COUNT_PHASES.has(entry.phase) ? `${elapsed}(${messageCount})` : elapsed;
   const fields = [`${title} ${phase} ${activity}`, `found:${entry.findingCount ?? 0}`];
   const remaining = progressTimeoutRemaining(entry, timeout, inactivityTimeout, now);
   if (!TERMINAL_AGENT_PHASES.has(entry.phase) && remaining <= TIMEOUT_WARNING_MS) {
@@ -477,7 +481,9 @@ function packProgressCells(cells, width) {
     Math.min(
       MAX_PROGRESS_COLUMNS,
       cells.length,
-      Math.floor((width + PROGRESS_COLUMN_GAP.length) / (requiredWidth + PROGRESS_COLUMN_GAP.length)),
+      Math.floor(
+        (width + PROGRESS_COLUMN_GAP.length) / (requiredWidth + PROGRESS_COLUMN_GAP.length),
+      ),
     ),
   );
   if (columnCount === 1) return cells.flatMap((cell) => wrapTextWithAnsi(cell, width));
@@ -504,7 +510,10 @@ export function formatReviewAgentProgressWidget(
   width = 120,
   inactivityTimeout = 600_000,
 ) {
-  const titleWidth = Math.max(...lanes.map((lane) => visibleWidth(`${laneIcon(lane.laneId)} ${lane.title}`)), 1);
+  const titleWidth = Math.max(
+    ...lanes.map((lane) => visibleWidth(`${laneIcon(lane.laneId)} ${lane.title}`)),
+    1,
+  );
   const cells = lanes.map((lane) =>
     progressCell(
       lane,
@@ -549,7 +558,10 @@ function createReviewAgentProgress(ctx, lanes) {
   const timeout = reviewAgentTimeout();
   const inactivityTimeout = reviewAgentInactivityTimeout();
   const progressByLane = new Map(
-    lanes.map((lane) => [lane.laneId, { phase: "waiting", startedAt: undefined, finishedAt: undefined }]),
+    lanes.map((lane) => [
+      lane.laneId,
+      { phase: "waiting", startedAt: undefined, finishedAt: undefined },
+    ]),
   );
   let requestWidgetRender;
   let polling = false;
@@ -590,8 +602,7 @@ function createReviewAgentProgress(ctx, lanes) {
       ...details,
       phase,
       startedAt: current.startedAt ?? (phase === "waiting" ? undefined : now),
-      timeoutStartedAt:
-        current.timeoutStartedAt ?? (phase === "working" ? now : undefined),
+      timeoutStartedAt: current.timeoutStartedAt ?? (phase === "working" ? now : undefined),
       finishedAt: TERMINAL_AGENT_PHASES.has(phase) ? now : undefined,
     });
     render();

@@ -1,3 +1,4 @@
+import type { AgentArtifactStatus } from "./artifacts";
 import type { SubagentSpec } from "./schemas";
 
 export const CUSTOM_ENTRY_TYPE = "herdr-subagent";
@@ -11,6 +12,7 @@ export interface SpawnedSubagentRecord {
   workspaceId: string;
   tabLabel: string;
   cwd: string;
+  projectRoot?: string;
   promptPreview: string;
   prompted: boolean;
   promptGeneration?: number;
@@ -28,6 +30,22 @@ export interface SpawnedSubagentRecord {
   outboxPath: string;
   replaceSystemPrompt: boolean;
   createdAt: number;
+  mainSessionId?: string;
+  taskId?: string;
+  attempt?: number;
+  parentAgentId?: string;
+  lifecycleStatus?: AgentArtifactStatus;
+  workPacketPath?: string;
+  promptPath?: string;
+  statusPath?: string;
+  checkpointPath?: string;
+  handoffPath?: string;
+  eventsPath?: string;
+  errorsPath?: string;
+  systemPromptPath?: string;
+  sessionPath?: string;
+  agentSessionId?: string;
+  spec?: SubagentSpec;
 }
 
 export type QuestionAudience = "main_agent" | "user" | "unsure";
@@ -40,6 +58,7 @@ export interface SubagentQuestion {
   context?: string;
   whatDone?: string;
   options?: string[];
+  artifactPath?: string;
   timestamp?: number;
 }
 
@@ -60,7 +79,7 @@ export interface SubagentDoneEvent {
   timestamp?: number;
   task?: string;
   result?: string;
-  status?: "success" | "error" | "aborted" | "unknown";
+  status?: "success" | "blocked" | "error" | "aborted" | "unknown";
   stopReason?: string;
   errorMessage?: string;
   runtimeMs?: number;
@@ -70,6 +89,7 @@ export interface SubagentDoneEvent {
   thinkingLevel?: string;
   model?: string;
   provider?: string;
+  handoffPath?: string;
 }
 
 export interface SubagentSessionEntry {
@@ -86,6 +106,8 @@ export interface SubagentSessionEntry {
 const PROFILE_LABELS: Record<NonNullable<SubagentSpec["profile"]>, string> = {
   "frontend-implementer": "FE",
   "backend-implementer": "BE",
+  "database-implementer": "DB",
+  "builder-implementer": "BLD",
   "unit-test-implementer": "UT",
   "e2e-test-implementer": "E2E",
   "test-reviewer": "TR",
@@ -201,8 +223,11 @@ export const formatQuestionForMainAgent = (
       : undefined,
     question.context?.trim() ? `Context:\n${question.context.trim()}` : undefined,
     question.whatDone?.trim() ? `Work completed so far:\n${question.whatDone.trim()}` : undefined,
+    question.artifactPath?.trim()
+      ? `Durable artifact: ${question.artifactPath.trim()}`
+      : undefined,
     recentOutput.trim() ? `Recent agent output:\n${recentOutput.trim()}` : undefined,
-    `Send the answer with manage_subagents action="prompt" id="${record.id}".`,
+    `Send the answer with herdr_manage_agents action="prompt" id="${record.id}".`,
   ];
   return sections.filter((section): section is string => Boolean(section)).join("\n\n");
 };
@@ -344,6 +369,7 @@ export const formatSubagentCompletionSummary = (
     `Task: ${truncateText(compactLine(completion.task || record.promptPreview), 220)}`,
     formatSubagentUsage(completion.usage, runtimeMs, formatSubagentEffort(record, completion)),
     `${statusEmoji(completion.status)} ${resultSummary(completion)}`,
+    completion.handoffPath ? `Durable handoff: ${completion.handoffPath}` : undefined,
     result ? `${handoffLabel(record, result)}:\n${truncateText(result, 4000)}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))

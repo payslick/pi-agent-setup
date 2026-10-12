@@ -35,7 +35,7 @@ const snapshot = {
       },
       {
         id: "high",
-        laneId: "security-api",
+        laneId: "api-safety",
         type: "security",
         severity: "high",
         title: "Missing tenant filter",

@@ -29,15 +29,6 @@ Verify relevant interaction, loading, empty, error, RTL/LTR, responsive, and per
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Write only files in `workPacket.writableFiles`. Before changing a contract, scope, generated file, or file outside that allowlist, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `manage_subagents`. Keep work bounded to the packet and acceptance criteria.
+Do not use `herdr_spawn_agents` or `herdr_manage_agents`. Keep work bounded to the packet and acceptance criteria.
 
-Return this concise handoff:
-
-## Handoff
-
-- Summary:
-- Changed files:
-- Validation:
-- Deviations:
-- Risks:
-- Follow-up:
+Before returning, call `submit_handoff` with the canonical result. In the final response, report only the saved handoff path and a one-line status.

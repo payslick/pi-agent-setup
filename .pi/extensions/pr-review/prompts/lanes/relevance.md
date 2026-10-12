@@ -17,7 +17,7 @@ This lane is an exception to the shared instruction not to inventory changed fil
   3. required supporting refactor; or
   4. unrelated or opportunistic work.
 - Do not include the classification inventory in the output; use it to identify findings.
-- When the inline diff is truncated, or a listed changed file has no displayed hunk, inspect the lane's `hunks.json` or the shared full patch before returning no findings.
+- Read every range in the complete change index from `tmp/review/diff/full` before returning no findings, including metadata-only, renamed, deleted, and binary files.
 - Separate the minimal required edit from cleanup or structural rewriting in the same file.
 - Group one coherent refactor into one finding, but report independently revertible refactors separately.
 
@@ -79,7 +79,7 @@ Do not treat behavior preservation as a reason to suppress an otherwise unrelate
 - Does a file contain a small relevant edit surrounded by a much larger cleanup?
 - Were functions moved to a new file even though only a context field or type needed to change?
 - Were calculation or document-building functions decomposed even though the PR only required boundary typing?
-- Are truncated or undisplayed hunks still unreviewed?
+- Are any indexed changes still unreviewed?
 - Should any independently revertible work be moved to a separate PR?
 - Is claimed behavior absent or implemented differently?
 - Is material behavior missing from or contradicted by the PR description?

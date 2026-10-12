@@ -1,9 +1,9 @@
 export const isExcludedReviewPath = (filePath: unknown): boolean =>
-  typeof filePath === "string" && /^(?:\.\/)?drizzle(?:\/|$)/i.test(filePath.trim());
+  typeof filePath === "string" && /(?:^|\/)drizzle(?:\/|$)/i.test(filePath.trim());
 
-export function filterReviewFindings<
-  T extends { path?: string; location?: { filePath?: string } },
->(findings: readonly T[]): T[] {
+export function filterReviewFindings<T extends { path?: string; location?: { filePath?: string } }>(
+  findings: readonly T[],
+): T[] {
   return findings.filter(
     (finding) => !isExcludedReviewPath(finding.location?.filePath ?? finding.path),
   );

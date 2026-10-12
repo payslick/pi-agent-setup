@@ -30,6 +30,35 @@ import {
   shouldUpsertIndexedFile,
   SQLITE_CACHE_PATH,
 } from "./sqlite-cache";
+import type { AffectedTestSelection } from "./affected-tests-contract";
+import { buildReverseGraph, moduleCandidates, type ReverseEdge } from "./impact";
+
+export async function findAffectedTests(
+  cwd: string,
+  editedPaths: readonly string[],
+  signal?: AbortSignal,
+): Promise<AffectedTestSelection> {
+  const result = await scan(cwd, cwd, false, signal);
+  const reverse = buildReverseGraph(result, moduleExtensions);
+  const reasons = new Set(result.stats.truncationReasons);
+  const tests = new Set<string>();
+  const isRunnableTest = (file: IndexedFile) =>
+    /[._](?:test|spec)\.[cm]?[jt]sx?$/.test(file.relativeToCwd);
+  for (const editedPath of editedPaths) {
+    abortIfRequested(signal);
+    const changed = resolveChangedFile(editedPath, result);
+    if (!changed) {
+      reasons.add(`unindexed:${editedPath}`);
+      continue;
+    }
+    if (isRunnableTest(changed)) tests.add(changed.relativeToCwd);
+    for (const hit of collectImpactHits(changed, reverse)) {
+      if (isRunnableTest(hit.importer)) tests.add(hit.importer.relativeToCwd);
+    }
+  }
+  return { tests: [...tests].sort(), complete: reasons.size === 0, reasons: [...reasons].sort() };
+}
+
 const DEFAULT_MAX_FILES = 12;
 const DEFAULT_IMPACT_RESULTS = 30;
 const STATUS_KEY = "project-index";
@@ -40,7 +69,7 @@ function positiveIntegerEnv(name: string, fallback: number, maximum: number): nu
 const limits = {
   visitedEntries: positiveIntegerEnv("PI_PROJECT_INDEX_MAX_VISITED_ENTRIES", 50_000, 1_000_000),
   acceptedFiles: positiveIntegerEnv("PI_PROJECT_INDEX_MAX_SCAN_FILES", 12_000, 100_000),
-  fileBytes: positiveIntegerEnv("PI_PROJECT_INDEX_MAX_READ_BYTES", 300_000, 5_000_000),
+  fileBytes: positiveIntegerEnv("PI_PROJECT_INDEX_MAX_READ_BYTES", 512 * 1024, 5_000_000),
   totalBytes: positiveIntegerEnv(
     "PI_PROJECT_INDEX_MAX_TOTAL_READ_BYTES",
     64 * 1024 * 1024,
@@ -81,8 +110,6 @@ interface ListedFiles {
   acceptedBytes: number;
   truncationReasons: string[];
 }
-type Dependency = { specifier: string; line: number };
-type ReverseEdge = Dependency & { importer: IndexedFile };
 type ImpactHit = ReverseEdge & { distance: number };
 const excludedDirs = new Set(
   ".git .next .turbo .cache coverage dist build node_modules".split(" "),
@@ -106,13 +133,6 @@ const stopWords = new Set(
     " ",
   ),
 );
-const dependencyPatterns = [
-  /\b(?:import|export)\s+(?:type\s+)?(?:[^"'`;]*?\sfrom\s*)?["']([^"'`]+)["']/g,
-  /\bimport\s*\(\s*["']([^"'`]+)["']/g,
-  /\brequire(?:\.resolve)?\s*\(\s*["']([^"'`]+)["']/g,
-  /\b(?:jest|vi)\s*\.\s*(?:doMock|mock|requireActual|setMock|unmock|unstable_mockModule)\s*\(\s*["']([^"'`]+)["']/g,
-  /\bmock\s*\.\s*module\s*\(\s*["']([^"'`]+)["']/g,
-];
 const impactCategoryOrder: readonly ImpactCategory[] = ["API", "Pages", "Tests", "Docs", "Other"];
 let lastScan: ScanResult | undefined;
 function abortIfRequested(signal?: AbortSignal): void {
@@ -607,98 +627,6 @@ function formatDebugSearchOutput(
   );
   return lines.join("\n");
 }
-function dependenciesIn(text: string): Dependency[] {
-  const matches: Array<{ specifier: string; index: number }> = [];
-  const seen = new Set<string>();
-  for (const pattern of dependencyPatterns) {
-    for (const match of text.matchAll(pattern)) {
-      const specifier = match[1];
-      if (!specifier || match.index === undefined) continue;
-      const key = `${match.index}:${specifier}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      matches.push({ specifier, index: match.index });
-    }
-  }
-  matches.sort((a, b) => a.index - b.index || a.specifier.localeCompare(b.specifier));
-  let cursor = 0;
-  let line = 1;
-  return matches.map((match) => {
-    while (true) {
-      const newline = text.indexOf("\n", cursor);
-      if (newline < 0 || newline >= match.index) break;
-      line += 1;
-      cursor = newline + 1;
-    }
-    return { specifier: match.specifier, line };
-  });
-}
-function moduleCandidates(base: string): string[] {
-  const candidates = [base];
-  for (const extension of moduleExtensions) candidates.push(`${base}${extension}`);
-  for (const extension of moduleExtensions) candidates.push(path.join(base, `index${extension}`));
-  const extension = path.extname(base).toLowerCase();
-  if ([".cjs", ".js", ".jsx", ".mjs"].includes(extension)) {
-    const stem = base.slice(0, -extension.length);
-    candidates.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.mts`, `${stem}.cts`);
-  }
-  return [...new Set(candidates.map((candidate) => path.normalize(candidate)))];
-}
-function dependencyBases(importer: IndexedFile, specifier: string, root: string): string[] {
-  const suffixIndex = specifier.search(/[?#]/);
-  const clean = suffixIndex > 0 ? specifier.slice(0, suffixIndex) : specifier;
-  if (!clean || clean.startsWith("node:")) return [];
-  if (clean.startsWith(".")) return [path.resolve(path.dirname(importer.absolutePath), clean)];
-  if (clean.startsWith("@/") || clean.startsWith("~/")) {
-    const relative = clean.slice(2);
-    return [path.resolve(root, relative), path.resolve(root, "src", relative)];
-  }
-  if (clean.startsWith("/")) return [path.resolve(root, clean.slice(1))];
-  return [path.resolve(root, clean), path.resolve(root, "src", clean)];
-}
-function resolveDependency(
-  importer: IndexedFile,
-  specifier: string,
-  root: string,
-  filesByAbsolutePath: ReadonlyMap<string, IndexedFile>,
-): IndexedFile | undefined {
-  for (const base of dependencyBases(importer, specifier, root)) {
-    for (const candidate of moduleCandidates(base)) {
-      const target = filesByAbsolutePath.get(candidate);
-      if (target) return target;
-    }
-  }
-  return undefined;
-}
-function buildReverseGraph(scanResult: ScanResult): Map<string, ReverseEdge[]> {
-  const filesByAbsolutePath = new Map(
-    scanResult.files.map((file) => [path.normalize(file.absolutePath), file] as const),
-  );
-  const reverse = new Map<string, ReverseEdge[]>();
-  const seenEdges = new Set<string>();
-  for (const importer of scanResult.files) {
-    if (importer.text === undefined) continue;
-    for (const dependency of dependenciesIn(importer.text)) {
-      const target = resolveDependency(
-        importer,
-        dependency.specifier,
-        scanResult.root,
-        filesByAbsolutePath,
-      );
-      if (!target || target.absolutePath === importer.absolutePath) continue;
-      const edgeKey = `${target.absolutePath}\0${importer.absolutePath}`;
-      if (seenEdges.has(edgeKey)) continue;
-      seenEdges.add(edgeKey);
-      const edges = reverse.get(target.absolutePath) ?? [];
-      edges.push({ importer, ...dependency });
-      reverse.set(target.absolutePath, edges);
-    }
-  }
-  for (const edges of reverse.values()) {
-    edges.sort((a, b) => a.importer.relativeToCwd.localeCompare(b.importer.relativeToCwd));
-  }
-  return reverse;
-}
 function resolveChangedFile(input: string, scanResult: ScanResult): IndexedFile | undefined {
   const normalizedInput = slashPath(input.trim()).replace(/^\.\//, "");
   const exact = scanResult.files.find(
@@ -716,7 +644,7 @@ function resolveChangedFile(input: string, scanResult: ScanResult): IndexedFile 
       ? [resolveAccessPath(scanResult.cwd, input)]
       : [resolveAccessPath(scanResult.cwd, input), resolveAccessPath(scanResult.root, input)];
   for (const base of bases) {
-    for (const candidate of moduleCandidates(base)) {
+    for (const candidate of moduleCandidates(base, moduleExtensions)) {
       const file = filesByAbsolutePath.get(candidate);
       if (file) return file;
     }
@@ -974,7 +902,9 @@ function registerImpactTool(pi: ExtensionAPI): void {
       updateIndexStatus(ctx, scanResult);
       abortIfRequested(signal);
       const changed = resolveChangedFile(params.file, scanResult);
-      const hits = changed ? collectImpactHits(changed, buildReverseGraph(scanResult)) : [];
+      const hits = changed
+        ? collectImpactHits(changed, buildReverseGraph(scanResult, moduleExtensions))
+        : [];
       const eligible = hits.filter(
         (hit) => params.includeTests !== false || hit.importer.kind !== "test",
       );

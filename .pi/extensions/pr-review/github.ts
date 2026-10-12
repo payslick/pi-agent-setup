@@ -76,11 +76,7 @@ export async function resolvePrNumber(
   return parsed.number;
 }
 
-export async function fetchPrData(
-  exec: PiExec,
-  cwd: string,
-  prNumber: number,
-): Promise<GithubPrData> {
+async function fetchPrView(exec: PiExec, cwd: string, prNumber: number): Promise<GhPrView> {
   const view = await exec(
     "gh",
     [
@@ -95,7 +91,39 @@ export async function fetchPrData(
   if (view.code !== 0)
     throw new Error(view.stderr.trim() || view.stdout.trim() || `gh pr view ${prNumber} failed`);
 
-  const parsed = JSON.parse(view.stdout.trim()) as GhPrView;
+  return JSON.parse(view.stdout.trim()) as GhPrView;
+}
+
+const metadataFromPrView = (parsed: GhPrView, prNumber: number): PRMetadata => ({
+  ref: {
+    owner: ownerFromUrl(parsed.url),
+    repo: repoFromUrl(parsed.url),
+    number: parsed.number ?? prNumber,
+  },
+  title: parsed.title ?? `PR #${prNumber}`,
+  body: parsed.body ?? "",
+  author: parsed.author?.login ?? "unknown",
+  url: parsed.url ?? "",
+  state: parsed.state ?? "unknown",
+  base: { ref: parsed.baseRefName ?? "main", sha: parsed.baseRefOid ?? "" },
+  head: { ref: parsed.headRefName ?? "", sha: parsed.headRefOid ?? "" },
+  commits: githubCommits(parsed.commits),
+});
+
+export async function fetchPrMetadata(
+  exec: PiExec,
+  cwd: string,
+  prNumber: number,
+): Promise<PRMetadata> {
+  return metadataFromPrView(await fetchPrView(exec, cwd, prNumber), prNumber);
+}
+
+export async function fetchPrData(
+  exec: PiExec,
+  cwd: string,
+  prNumber: number,
+): Promise<GithubPrData> {
+  const parsed = await fetchPrView(exec, cwd, prNumber);
   const patchResult = await exec("gh", ["pr", "diff", String(prNumber), "--patch"], {
     cwd,
     timeout: 60_000,
@@ -121,24 +149,36 @@ export async function fetchPrData(
 
   return {
     prNumber,
-    metadata: {
-      ref: {
-        owner: ownerFromUrl(parsed.url),
-        repo: repoFromUrl(parsed.url),
-        number: parsed.number ?? prNumber,
-      },
-      title: parsed.title ?? `PR #${prNumber}`,
-      body: parsed.body ?? "",
-      author: parsed.author?.login ?? "unknown",
-      url: parsed.url ?? "",
-      state: parsed.state ?? "unknown",
-      base: { ref: parsed.baseRefName ?? "main", sha: parsed.baseRefOid ?? "" },
-      head: { ref: parsed.headRefName ?? "", sha: parsed.headRefOid ?? "" },
-      commits: githubCommits(parsed.commits),
-    },
+    metadata: metadataFromPrView(parsed, prNumber),
     files: files.length ? files : filesFromPatch(patchResult.stdout),
     patch: patchResult.stdout,
     hunks: parseAddedLineDiffHunks(patchResult.stdout),
+  };
+}
+
+export async function fetchLocalMetadata(
+  exec: PiExec,
+  cwd: string,
+  baseRef: string,
+): Promise<PRMetadata> {
+  const headSha = await requiredStdout(exec, cwd, "git", ["rev-parse", "HEAD"]);
+  const baseSha = await requiredStdout(exec, cwd, "git", ["rev-parse", baseRef]);
+  const branch = await optionalStdout(exec, cwd, "git", ["branch", "--show-current"]);
+  const commitLog = await requiredStdout(exec, cwd, "git", [
+    "log",
+    "--format=%H%x00%s%x00%b%x1e",
+    `${baseSha}..${headSha}`,
+  ]);
+  return {
+    ref: { owner: "local", repo: path.basename(cwd), number: 0 },
+    title: branch || `Local diff against ${baseRef}`,
+    body: `Local diff against ${baseRef}`,
+    author: process.env.USER ?? "local",
+    url: "",
+    state: "local",
+    base: { ref: baseRef, sha: baseSha },
+    head: { ref: branch, sha: headSha },
+    commits: localCommits(commitLog),
   };
 }
 
@@ -147,10 +187,7 @@ export async function fetchLocalData(
   cwd: string,
   baseRef: string,
 ): Promise<GithubPrData> {
-  const headSha = await requiredStdout(exec, cwd, "git", ["rev-parse", "HEAD"]);
-  const baseSha = await requiredStdout(exec, cwd, "git", ["rev-parse", baseRef]);
-  const branch = await optionalStdout(exec, cwd, "git", ["branch", "--show-current"]);
-  const title = branch || `Local diff against ${baseRef}`;
+  const metadata = await fetchLocalMetadata(exec, cwd, baseRef);
   const nameStatus = await requiredStdout(exec, cwd, "git", [
     "diff",
     "--name-status",
@@ -162,25 +199,10 @@ export async function fetchLocalData(
     "--unified=80",
     `${baseRef}...HEAD`,
   ]);
-  const commitLog = await requiredStdout(exec, cwd, "git", [
-    "log",
-    "--format=%H%x00%s%x00%b%x1e",
-    `${baseRef}..HEAD`,
-  ]);
   const files = filesFromNameStatus(nameStatus);
   return {
     prNumber: 0,
-    metadata: {
-      ref: { owner: "local", repo: path.basename(cwd), number: 0 },
-      title,
-      body: `Local diff against ${baseRef}`,
-      author: process.env.USER ?? "local",
-      url: "",
-      state: "local",
-      base: { ref: baseRef, sha: baseSha },
-      head: { ref: branch, sha: headSha },
-      commits: localCommits(commitLog),
-    },
+    metadata,
     files: files.length ? files : filesFromPatch(patch),
     patch,
     hunks: parseAddedLineDiffHunks(patch),

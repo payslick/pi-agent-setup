@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  copyToClipboard,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 
 import {
@@ -51,6 +55,16 @@ registerPrefixCommand({
   description: "search session",
   group: "Session",
   run: openSessionSearch,
+});
+
+registerPrefixCommand({
+  key: "y",
+  description: "copy entire prompt",
+  group: "Prompts",
+  async run(ctx) {
+    await copyToClipboard(ctx.ui.getEditorText());
+    ctx.ui.notify("Prompt copied to clipboard", "info");
+  },
 });
 
 const runPrefixCommand = (ctx: ExtensionContext, data: string): void => {

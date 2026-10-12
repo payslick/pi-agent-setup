@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as codingAgent from "@earendil-works/pi-coding-agent";
 import {
   AssistantMessageComponent,
   UserMessageComponent,
@@ -26,7 +27,7 @@ import {
   messageViewportLines,
 } from "../prefix-mode/message-scroll";
 import { PrefixSequence } from "../prefix-mode/prefix-sequence";
-import { PrefixCommandRegistry } from "../prefix-mode/registry";
+import { PrefixCommandRegistry, prefixCommandRegistry } from "../prefix-mode/registry";
 import {
   SessionSearchComponent,
   SessionSearchModel,
@@ -180,7 +181,60 @@ const fullscreenMessageScrollerHarness = (
   };
 };
 
+const promptClipboardContext = (initialText: string) => {
+  let text = initialText;
+  const notifications: Array<{ message: string; type: string }> = [];
+  const ctx = {
+    ui: {
+      getEditorText: () => text,
+      setEditorText: (value: string) => {
+        text = value;
+      },
+      notify: (message: string, type: string) => notifications.push({ message, type }),
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, notifications };
+};
+
+const runCopyPrefix = async (ctx: ExtensionContext) => {
+  const command = prefixCommandRegistry.resolve("y");
+  if (!command) throw new Error("Prefix y is not registered");
+  await command.run(ctx);
+};
+
 describe("Pi prefix commands", () => {
+  test.each([
+    ["multiline Unicode", `  first line\n\n${"pasted text שלום 📝\n".repeat(300)}last line  \n`],
+    ["empty", ""],
+  ])("prefix y copies the entire %s prompt without changing it", async (_scenario, prompt) => {
+    const { ctx, notifications } = promptClipboardContext(prompt);
+    let clipboard = "previous clipboard contents";
+    const copy = spyOn(codingAgent, "copyToClipboard").mockImplementation(async (text) => {
+      clipboard = text;
+    });
+    try {
+      await runCopyPrefix(ctx);
+      expect(clipboard).toBe(prompt);
+      expect(ctx.ui.getEditorText()).toBe(prompt);
+      expect(notifications).toEqual([{ message: "Prompt copied to clipboard", type: "info" }]);
+    } finally {
+      copy.mockRestore();
+    }
+  });
+
+  test("prefix y preserves the prompt and reports no success when the clipboard fails", async () => {
+    const { ctx, notifications } = promptClipboardContext("keep this draft\n");
+    const copy = spyOn(codingAgent, "copyToClipboard").mockRejectedValue(
+      new Error("Clipboard unavailable"),
+    );
+    try {
+      await expect(runCopyPrefix(ctx)).rejects.toThrow("Clipboard unavailable");
+      expect(ctx.ui.getEditorText()).toBe("keep this draft\n");
+      expect(notifications).toEqual([]);
+    } finally {
+      copy.mockRestore();
+    }
+  });
   test("shares commands across Pi's isolated extension module loaders", async () => {
     const registryPath = fileURLToPath(new URL("../prefix-mode/registry.ts", import.meta.url));
     const loadRegistry = () =>

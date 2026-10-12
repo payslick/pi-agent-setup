@@ -5,6 +5,9 @@ tmp/
 .pi/worktrees/
 # Pi runtime artifacts
 .pi/tmp/
+.pi/runs/
+.pi/herdr/runs/
+.pi-runs/
 
 # Local environment files
 .env

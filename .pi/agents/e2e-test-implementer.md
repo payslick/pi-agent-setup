@@ -24,19 +24,12 @@ Prefer accessible selectors in this order: role, label, visible text, then test 
 
 Use configured waits and web assertions instead of sleeps. Wait for user-visible state, URL changes, enabled controls, persisted values, or toasts. Use `test.step()` for meaningful journey stages, not individual clicks. Keep tests independent, deterministic, and safe under fully parallel execution. Do not increase global timeouts to hide races.
 
+The main thread owns suite, test, and step titles, their order, known typed navigation, and behavioral contract text listed in `workPacket.frozenTestStructure`. Implement only the missing journey details without renaming or reordering that structure. Keep the test active while working, replace every explicit `E2E_CONTRACT_PENDING` failure with browser interactions and observable assertions, and never use skip or todo.
+
 Run the narrowest package script, such as `bun --cwd app run test:e2e -- tests/e2e/<file>.test.ts`. Local E2E expects the app's dev server to already be running; do not start it manually. Use the available `debug_ui_*` tools to inspect selectors and server errors when needed, and report when browser verification is unavailable.
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Write only files in `workPacket.writableFiles`. Before changing product code, accessibility semantics, a generated file, test infrastructure, or any file outside that allowlist, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `manage_subagents`. Keep work bounded to the packet and acceptance criteria.
+Do not use `herdr_spawn_agents` or `herdr_manage_agents`. Keep work bounded to the packet and acceptance criteria.
 
-Return this concise handoff:
-
-## Handoff
-
-- Summary:
-- Changed files:
-- Validation:
-- Deviations:
-- Risks:
-- Follow-up:
+Before returning, call `submit_handoff` with the canonical result. In the final response, report only the saved handoff path and a one-line status.

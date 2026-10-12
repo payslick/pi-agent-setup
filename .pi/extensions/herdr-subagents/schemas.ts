@@ -6,11 +6,17 @@ export const MAX_SUBAGENTS_PER_CALL = 15;
 export const DEFAULT_READ_LINES = 120;
 export const DEFAULT_SUBAGENT_MODEL =
   process.env.PI_SUBAGENT_DEFAULT_MODEL ?? "openai-codex/gpt-5.6-sol";
-export const SUBAGENT_PROFILE_NAMES = [
+export const IMPLEMENTATION_PROFILE_NAMES = [
   "frontend-implementer",
   "backend-implementer",
+  "database-implementer",
+  "builder-implementer",
   "unit-test-implementer",
   "e2e-test-implementer",
+] as const;
+
+export const SUBAGENT_PROFILE_NAMES = [
+  ...IMPLEMENTATION_PROFILE_NAMES,
   "test-reviewer",
 ] as const;
 
@@ -21,14 +27,39 @@ const thinkingSchema = StringEnum(
   },
 );
 
+const expectedFailingTestSchema = Type.Object({
+  path: Type.String({ description: "Repository-relative contract test file." }),
+  title: Type.String({ description: "Exact active test title expected to fail in the red phase." }),
+  expectedReason: Type.String({ description: "Why the test is expected to fail before implementation." }),
+  outputPattern: Type.String({
+    description: "Exact output text that proves the test failed for the declared reason.",
+  }),
+});
+
+const frozenTestStructureSchema = Type.Object({
+  path: Type.String({ description: "Repository-relative test file whose structure is main-owned." }),
+  orderedTitles: Type.Array(Type.String(), {
+    minItems: 1,
+    description: "Suite, test, and step titles in required source order.",
+  }),
+  requiredText: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Known navigation, API calls, or behavioral contract text that must remain.",
+    }),
+  ),
+});
+
 const workPacketSchema = Type.Object({
+  taskId: Type.Optional(
+    Type.String({ description: "Stable logical task identifier reused across restart attempts." }),
+  ),
   objective: Type.String({ description: "Bounded implementation or review objective." }),
   writableFiles: Type.Array(Type.String(), {
     description: "Exclusive file ownership for this worker. Empty for read-only work.",
   }),
   contractFiles: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Main-agent-owned contracts that the worker may read but must not modify.",
+      description: "Architect-owned contracts and active tests that the worker may read but not modify.",
     }),
   ),
   acceptanceCriteria: Type.Array(Type.String(), {
@@ -36,6 +67,13 @@ const workPacketSchema = Type.Object({
     description: "Observable conditions required for completion.",
   }),
   nonGoals: Type.Optional(Type.Array(Type.String(), { description: "Explicitly excluded work." })),
+  validationPhase: Type.Optional(
+    StringEnum(["red", "green"] as const, {
+      description: "Red expects declared contract failures; green requires the assigned tests to pass.",
+    }),
+  ),
+  expectedFailingTests: Type.Optional(Type.Array(expectedFailingTestSchema)),
+  frozenTestStructure: Type.Optional(Type.Array(frozenTestStructureSchema)),
 });
 
 const subagentSpecSchema = Type.Object({
@@ -141,10 +179,12 @@ export const spawnSubagentsSchema = Type.Object({
 export type SpawnSubagentsInput = Static<typeof spawnSubagentsSchema>;
 export type SubagentSpec = Static<typeof subagentSpecSchema>;
 export type SubagentWorkPacket = Static<typeof workPacketSchema>;
+export type ExpectedFailingTest = Static<typeof expectedFailingTestSchema>;
+export type FrozenTestStructure = Static<typeof frozenTestStructureSchema>;
 
 export const manageSubagentsSchema = Type.Object({
-  action: StringEnum(["list", "read", "prompt", "focus", "abort", "close"] as const, {
-    description: "List, inspect, prompt, focus, abort, or close Herdr-managed subagents.",
+  action: StringEnum(["list", "read", "prompt", "focus", "abort", "close", "restart"] as const, {
+    description: "List, inspect, prompt, focus, abort, close, or restart Herdr-managed subagents.",
   }),
   id: Type.Optional(
     Type.String({ description: "Subagent id, name, Herdr tab id, or Herdr pane id." }),
@@ -169,6 +209,45 @@ export const askMainAgentSchema = Type.Object({
     Type.String({ description: "Short summary of what the subagent has done so far." }),
   ),
   options: Type.Optional(Type.Array(Type.String(), { description: "Optional answer choices." })),
+  artifactPath: Type.Optional(
+    Type.String({ description: "Durable checkpoint, handoff, or module-request path for the main agent." }),
+  ),
 });
 
 export type AskMainAgentInput = Static<typeof askMainAgentSchema>;
+
+const moduleImplementationRequestSchema = Type.Object({
+  taskId: Type.String({ description: "Stable logical task identifier for the requested module." }),
+  objective: Type.String(),
+  reason: Type.String({ description: "Why this responsibility should be an independent module." }),
+  profile: StringEnum(
+    ["frontend-implementer", "backend-implementer", "database-implementer", "builder-implementer"] as const,
+  ),
+  writableFiles: Type.Array(Type.String(), { minItems: 1 }),
+  contractFiles: Type.Array(Type.String(), { minItems: 1 }),
+  acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }),
+  nonGoals: Type.Optional(Type.Array(Type.String())),
+});
+
+export const submitCheckpointSchema = Type.Object({
+  summary: Type.String(),
+  completed: Type.Array(Type.String()),
+  remaining: Type.Array(Type.String()),
+  changedFiles: Type.Array(Type.String()),
+  validation: Type.Array(Type.String()),
+  blocker: Type.Optional(Type.String()),
+});
+
+export const submitHandoffSchema = Type.Object({
+  status: StringEnum(["success", "blocked", "needs-main", "error", "aborted"] as const),
+  summary: Type.String(),
+  changedFiles: Type.Array(Type.String()),
+  validation: Type.Array(Type.String()),
+  deviations: Type.Array(Type.String()),
+  risks: Type.Array(Type.String()),
+  followUp: Type.Array(Type.String()),
+  moduleRequests: Type.Optional(Type.Array(moduleImplementationRequestSchema)),
+});
+
+export type SubmitCheckpointInput = Static<typeof submitCheckpointSchema>;
+export type SubmitHandoffInput = Static<typeof submitHandoffSchema>;

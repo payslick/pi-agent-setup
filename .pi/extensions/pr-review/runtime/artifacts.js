@@ -48,6 +48,8 @@ export async function writeSharedReviewArtifacts(ctx, prData, lanes) {
   );
   await writeSharedFile("files.json", `${JSON.stringify(prData.files, null, 2)}\n`);
   await writeSharedFile("hunks.json", `${JSON.stringify(prData.hunks, null, 2)}\n`);
+  if (prData.diffContext)
+    await writeSharedFile("diff-index.json", `${JSON.stringify(prData.diffContext, null, 2)}\n`);
   await writeSharedFile(
     "patch.diff",
     prData.patch.endsWith("\n") ? prData.patch : `${prData.patch}\n`,
@@ -71,7 +73,14 @@ export async function writeSharedReviewArtifacts(ctx, prData, lanes) {
     "review-agent-tool-guard.ts",
     reviewAgentToolGuardSource(sharedDir, sharedDir),
   );
-  return { sessionId, baseDir, sharedDir, files: writtenFiles, fullPatch: prData.patch };
+  return {
+    sessionId,
+    baseDir,
+    sharedDir,
+    files: writtenFiles,
+    fullPatch: prData.patch,
+    diffContext: prData.diffContext,
+  };
 }
 
 function sharedReviewReadme(sessionId, sharedDir) {
@@ -87,6 +96,7 @@ function sharedReviewReadme(sessionId, sharedDir) {
     "- `files.json` — changed file list from GitHub/local diff.",
     "- `hunks.json` — parsed diff hunks with line numbers.",
     "- `patch.diff` — full patch text.",
+    "- `diff-index.json` — all changes with reviewed-source and full-diff line ranges; the full diff is at `tmp/review/diff/full`.",
     "- `lanes.json` — lane routing summary.",
     "- `review-agent-tool-guard.ts` — tool-call guard loaded into lane-agent Pi processes.",
     "",
@@ -162,7 +172,7 @@ export function reviewAgentToolGuardSource(laneDir, sharedDir, options = {}) {
           "      },",
           "    },",
           "    execute: async (_toolCallId, finding, _signal, _onUpdate, ctx) => {",
-          '      if (typeof finding.path === "string" && /^(?:\\.\\/)?drizzle(?:\\/|$)/i.test(finding.path.trim())) {',
+          '      if (typeof finding.path === "string" && /(?:^|\\/)drizzle(?:\\/|$)/i.test(finding.path.trim())) {',
           '        return { content: [{ type: "text", text: "Files under drizzle/ are outside review scope." }], isError: true };',
           "      }",
           `      const outputPath = path.resolve(ctx.cwd, ${JSON.stringify(partialFindingsFile)});`,

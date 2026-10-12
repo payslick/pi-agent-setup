@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test ./.pi/extensions",
+    "test": "bun .pi/scripts/test.ts",
     "check": "bun .pi/scripts/check.ts",
     "format": "oxfmt"
   },

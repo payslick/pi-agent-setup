@@ -27,6 +27,11 @@ const LONG_MESSAGE_LINE_COUNT = 10;
 const MARKDOWN_RESPONSE_INSTRUCTION =
   "Write every assistant response in Markdown. Use headings, lists, tables, blockquotes, and fenced code blocks when they improve clarity. Keep H1 headings unchanged. Render H2 through H6 with `##` so Pi does not display literal heading hashes, and prefix the heading text with one `>` for each heading level: `## > > H2`, `## > > > H3`, through `## > > > > > > H6`. Do not wrap the entire response in a code fence.";
 
+export function appendMarkdownResponseInstruction(systemPrompt: string): string {
+  if (systemPrompt.includes(MARKDOWN_RESPONSE_INSTRUCTION)) return systemPrompt;
+  return `${systemPrompt}\n\n${MARKDOWN_RESPONSE_INSTRUCTION}`;
+}
+
 const CONVERSATION_VIEWS: ConversationView[] = ["both", "messages", "responses"];
 type ConversationItem = Exclude<ConversationView, "both">;
 type ConversationMessageComponent = UserMessageComponent | AssistantMessageComponent;
@@ -308,7 +313,10 @@ export default function conversationPresentation(pi: ExtensionAPI): void {
   let restoreConversationPresentation: (() => void) | undefined;
   let unsubscribeConversationView: (() => void) | undefined;
 
-  pi.on("before_agent_start", () => ({ systemPrompt: MARKDOWN_RESPONSE_INSTRUCTION }));
+  pi.on("before_agent_start", (event) => {
+    const systemPrompt = appendMarkdownResponseInstruction(event.systemPrompt);
+    return systemPrompt === event.systemPrompt ? undefined : { systemPrompt };
+  });
   pi.on("session_start", (_event, ctx) => {
     resetConversationView();
     unsubscribeConversationView ??= pi.events.on(CONVERSATION_VIEW_CYCLE_EVENT, (reportView) => {

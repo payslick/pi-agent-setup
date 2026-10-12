@@ -152,7 +152,7 @@ function installFooter(ctx: ExtensionContext, state: FooterState): void {
         let cwd = formatCwd(ctx.sessionManager.getCwd());
         const branch = footerData.getGitBranch();
         const branchLabel = prStatus ?? branch?.replace(/^omry\//, "");
-        if (branchLabel) cwd = `${cwd} ${branchLabel}`;
+        if (branchLabel) cwd = `${branchLabel} ${cwd}`;
         const sessionName = ctx.sessionManager.getSessionName();
         if (sessionName) cwd = `${cwd} • ${sessionName}`;
         const sessionId = ctx.sessionManager.getSessionId();

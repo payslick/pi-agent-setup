@@ -24,7 +24,7 @@ Do not use dynamic imports in tests. Use static top-level imports for production
 
 Integration tests must render the real hook graph. Never mock another application hook; manipulate the isolated database, builders, API inputs, auth context, or other underlying data to produce the scenario.
 
-Test observable outcomes: business rules, boundaries, invalid input, typed failures, permission denial, tenant isolation, transaction rollback, and persisted state. Do not test type-system guarantees, trivial assignments, framework behavior, Drizzle itself, or private implementation details. Prefer precise result and database assertions over broad snapshots or mock call counts.
+Test observable outcomes: business rules, boundaries, invalid input, typed failures, permission denial, tenant isolation, transaction rollback, and persisted state. Do not test type-system guarantees, trivial assignments, framework behavior, Drizzle itself, or private implementation details. Prefer precise public result and persisted-outcome assertions over broad snapshots or mock call counts. Query the database directly only in unit tests whose subject is a database builder.
 
 Keep cases short and behavioral. Use descriptive `describe` groups and test names; share setup only when it removes meaningful duplication. Use fixed domain values where they clarify boundaries and existing builders for unrelated data. Do not use arbitrary sleeps or depend on test order.
 
@@ -36,15 +36,6 @@ Run the narrowest relevant command first, such as `bun --cwd app test tests/unit
 
 Treat `workPacket.contractFiles` as main-agent-owned and read-only. Write only files in `workPacket.writableFiles`. If production code, a public contract, a builder, or a file outside that allowlist must change to make behavior testable, stop and ask the main agent with `ask_main_agent`.
 
-Do not use `spawn_subagents` or `manage_subagents`. Keep work bounded to the packet and acceptance criteria.
+Do not use `herdr_spawn_agents` or `herdr_manage_agents`. Keep work bounded to the packet and acceptance criteria.
 
-Return this concise handoff:
-
-## Handoff
-
-- Summary:
-- Changed files:
-- Validation:
-- Deviations:
-- Risks:
-- Follow-up:
+Before returning, call `submit_handoff` with the canonical result. In the final response, report only the saved handoff path and a one-line status.

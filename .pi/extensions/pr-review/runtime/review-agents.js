@@ -16,6 +16,7 @@ import {
   truncateForPrompt,
 } from "./findings.js";
 import { buildLaneReviewPrompt } from "./lanes.js";
+import { formatReviewDiffContext } from "../diff-context.ts";
 import { readReviewLanePrompt, readSharedReviewLanePrompt } from "../prompt-loader.ts";
 import { filterReviewFindings } from "../review-scope.ts";
 import { resolvePrMetadataSkillPath } from "./pr-metadata.js";
@@ -173,6 +174,7 @@ export async function runCiAnalysisLaneAgent(pi, ctx, prMetadata, ciStatus, shar
     "Use shared CI artifacts first, especially:",
     `- ${sharedArtifacts.sharedDir}/ci-status.json`,
     ...(ciStatus.failedLogFiles ?? []).map((file) => `- ${file}`),
+    ...(sharedArtifacts.diffContext ? [formatReviewDiffContext(sharedArtifacts.diffContext)] : []),
   ].join("\n");
   const artifacts = await createLaneArtifactWriter(ctx, laneId);
   const toolPolicy = reviewAgentToolPolicy(laneId);
@@ -260,6 +262,7 @@ export async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArt
     sharedFiles: sharedArtifacts.files,
     partialFindingsFile,
     fullPatch: packet.laneId === "pr-metadata" ? sharedArtifacts.fullPatch : undefined,
+    diffContext: sharedArtifacts.diffContext,
   });
   const artifacts = await createLaneArtifactWriter(ctx, packet.laneId);
   await artifacts.write("prompt.md", prompt);
@@ -305,8 +308,7 @@ export async function prepareLaneAgentRun(pi, ctx, prMetadata, packet, sharedArt
     ...selectedReviewAgentDefaults(pi, ctx),
     ...toolPolicy,
     systemPrompt,
-    skillPath:
-      packet.laneId === "pr-metadata" ? resolvePrMetadataSkillPath(ctx) : undefined,
+    skillPath: packet.laneId === "pr-metadata" ? resolvePrMetadataSkillPath(ctx) : undefined,
   });
   return { prompt, artifacts, agentArguments };
 }
@@ -350,12 +352,7 @@ function partialFindingOutput(findings) {
   return records.length ? `${records.map((finding) => JSON.stringify(finding)).join("\n")}\n` : "";
 }
 
-async function writeFinalFindings(
-  artifacts,
-  findings,
-  partialFindingsPath,
-  repaired = false,
-) {
+async function writeFinalFindings(artifacts, findings, partialFindingsPath, repaired = false) {
   await artifacts.write(
     "findings.json",
     `${JSON.stringify({ findings, ...(repaired ? { repaired: true } : {}) }, null, 2)}\n`,
@@ -370,12 +367,7 @@ async function writeFinalFindings(
   await artifacts.write("partial-findings.jsonl", `${existingOutput}${output}`);
 }
 
-async function persistFinalFindings(
-  artifacts,
-  findings,
-  partialFindingsPath,
-  repaired = false,
-) {
+async function persistFinalFindings(artifacts, findings, partialFindingsPath, repaired = false) {
   try {
     await writeFinalFindings(artifacts, findings, partialFindingsPath, repaired);
   } catch (error) {
@@ -397,10 +389,7 @@ async function processLaneAgentOutput(
     const error =
       result.stderr.trim() || result.stdout.trim() || `review agent exited ${result.code}`;
     await artifacts.write("error.txt", `${error}\n`);
-    const partialFindings = await readPartialReviewFindings(
-      partialFindingsPath,
-      packet.laneId,
-    );
+    const partialFindings = await readPartialReviewFindings(partialFindingsPath, packet.laneId);
     onProgress?.("error", { findingCount: partialFindings.length });
     return laneAgentErrorResult(
       packet.laneId,
@@ -418,10 +407,7 @@ async function processLaneAgentOutput(
     await artifacts.write("parse-error.txt", `${parseErrorMessage}\n`);
     const repaired = await repairAgentFindings(pi, ctx, packet, result.stdout, artifacts.write);
     if (!repaired) {
-      const partialFindings = await readPartialReviewFindings(
-        partialFindingsPath,
-        packet.laneId,
-      );
+      const partialFindings = await readPartialReviewFindings(partialFindingsPath, packet.laneId);
       onProgress?.("error", { findingCount: partialFindings.length });
       return laneAgentErrorResult(
         packet.laneId,
@@ -478,18 +464,9 @@ export async function runLaneAgent(pi, ctx, prMetadata, packet, sharedArtifacts,
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     await artifacts.write("error.txt", `${errorMessage}\n`);
-    const partialFindings = await readPartialReviewFindings(
-      partialFindingsPath,
-      packet.laneId,
-    );
+    const partialFindings = await readPartialReviewFindings(partialFindingsPath, packet.laneId);
     onProgress?.("error", { findingCount: partialFindings.length });
-    return laneAgentErrorResult(
-      packet.laneId,
-      errorMessage,
-      artifacts,
-      undefined,
-      partialFindings,
-    );
+    return laneAgentErrorResult(packet.laneId, errorMessage, artifacts, undefined, partialFindings);
   }
 }
 

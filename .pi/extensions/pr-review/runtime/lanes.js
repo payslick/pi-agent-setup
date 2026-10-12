@@ -1,9 +1,7 @@
 import { designRulesPrompt } from "../../../design-rules/index.ts";
+import { formatReviewDiffContext } from "../diff-context.ts";
 import { readReviewLanePrompt } from "../prompt-loader.ts";
 import { filterReviewFiles, filterReviewHunks } from "../review-scope.ts";
-
-const HUNK_LIMIT = 80;
-const HUNK_LINE_LIMIT = 220;
 
 const laneDefinitions = [
   {
@@ -22,8 +20,8 @@ const laneDefinitions = [
     score: () => 96,
   },
   {
-    laneId: "security-api",
-    title: "Security/API safety",
+    laneId: "api-safety",
+    title: "API safety",
     score: ({ files }) =>
       files.some((file) => /server|api|route|controller|auth|schema|validation|db/i.test(file.path))
         ? 85
@@ -140,7 +138,7 @@ function laneFileMatcher(laneId) {
   switch (laneId) {
     case "docs":
       return (filePath) => /(^|\/)(docs|documentation)(\/|$)|readme|\.mdx?$/i.test(filePath);
-    case "security-api":
+    case "api-safety":
       return (filePath) =>
         /server|api|route|controller|auth|permission|middleware|schema|validation|db|drizzle|trpc|env/i.test(
           filePath,
@@ -213,7 +211,7 @@ export function buildLaneReviewPrompt(pr, packet, artifacts) {
       ? [
           `Shared directory: ${artifacts.sharedDir}`,
           `Lane directory: ${artifacts.laneDir}`,
-          "Artifact paths are references, not a reading checklist. Do not read them unless a specific truncated hunk requires omitted context:",
+          "Use the complete change index below to read the relevant diff ranges. Other artifact paths provide supporting metadata:",
           ...artifacts.sharedFiles.map((file) => `- ${file}`),
           `Lane packet: ${artifacts.laneDir}/packet.json`,
           `Lane hunks: ${artifacts.laneDir}/hunks.json`,
@@ -237,18 +235,7 @@ export function buildLaneReviewPrompt(pr, packet, artifacts) {
     "## Changed files",
     ...packet.files.map((file) => `- ${file.path} (${file.status})`),
     "",
-    packet.laneId === "pr-metadata" ? "## Complete reviewable diff" : "## Diff hunks",
-    ...(packet.laneId === "pr-metadata" && artifacts?.fullPatch !== undefined
-      ? [
-          `This is the complete reviewable patch also stored at ${artifacts.sharedDir}/patch.diff:`,
-          artifacts.fullPatch || "(empty patch)",
-        ]
-      : [
-          artifacts
-            ? `Diff hunks are also stored in ${artifacts.laneDir}/hunks.json. The shared patch is at ${artifacts.sharedDir}/patch.diff if tools are enabled.`
-            : "Inline diff hunks follow.",
-          formatHunks(packet.hunks),
-        ]),
+    formatLaneDiff(packet, artifacts),
     "",
     "Return JSON only with this shape:",
     packet.laneId === "pr-metadata"
@@ -271,39 +258,25 @@ function diffLinePrefix(kind) {
   return " ";
 }
 
-function formatHunks(hunks) {
-  if (!hunks.length) return "No hunks available.";
-  const displayedHunks = hunks.slice(0, HUNK_LIMIT);
-  const warnings = truncationWarnings(hunks);
-  const body = displayedHunks
-    .map((hunk) => {
-      const lines = hunk.lines
-        .slice(0, HUNK_LINE_LIMIT)
-        .map((line) => {
-          if (line.kind === "hunk") return line.content;
-          const prefix = diffLinePrefix(line.kind);
-          const number = line.kind === "delete" ? line.oldLineNumber : line.newLineNumber;
-          return `${prefix}${number ?? ""}: ${line.content}`;
-        })
-        .join("\n");
-      const omittedLineCount = Math.max(0, hunk.lines.length - HUNK_LINE_LIMIT);
-      const truncationNote = omittedLineCount
-        ? `\n# Diff context truncated: ${omittedLineCount} additional line(s) from this hunk were omitted.`
-        : "";
-      return `### ${hunk.filePath}\n${lines}${truncationNote}`;
-    })
-    .join("\n\n");
-  return warnings.length ? `${warnings.join("\n")}\n\n${body}` : body;
+function formatLaneDiff(packet, artifacts) {
+  if (artifacts?.diffContext) return formatReviewDiffContext(artifacts.diffContext);
+  if (packet.laneId === "pr-metadata" && artifacts?.fullPatch !== undefined)
+    return `## Complete reviewable diff\n${artifacts.fullPatch || "(empty patch)"}`;
+  return `## Diff hunks\n${formatHunks(packet.hunks)}`;
 }
 
-function truncationWarnings(hunks) {
-  const warnings = [];
-  if (hunks.length > HUNK_LIMIT)
-    warnings.push(`# Diff context truncated: showing ${HUNK_LIMIT}/${hunks.length} hunks.`);
-  const truncatedHunks = hunks.filter((hunk) => hunk.lines.length > HUNK_LINE_LIMIT).length;
-  if (truncatedHunks > 0)
-    warnings.push(
-      `# Diff context truncated: ${truncatedHunks} hunk(s) exceed ${HUNK_LINE_LIMIT} displayed lines each.`,
-    );
-  return warnings;
+function formatHunks(hunks) {
+  if (!hunks.length) return "No hunks available.";
+  return hunks
+    .map((hunk) => {
+      const lines = hunk.lines
+        .map((line) => {
+          if (line.kind === "hunk") return line.content;
+          const number = line.kind === "delete" ? line.oldLineNumber : line.newLineNumber;
+          return `${diffLinePrefix(line.kind)}${number ?? ""}: ${line.content}`;
+        })
+        .join("\n");
+      return `### ${hunk.filePath}\n${lines}`;
+    })
+    .join("\n\n");
 }

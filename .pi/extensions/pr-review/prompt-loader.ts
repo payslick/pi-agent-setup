@@ -4,7 +4,7 @@ export const REVIEW_LANE_PROMPT_IDS = [
   "correctness",
   "pr-metadata",
   "relevance",
-  "security-api",
+  "api-safety",
   "tests",
   "docs",
   "architecture",
@@ -20,11 +20,12 @@ export const REVIEW_LANE_PROMPT_IDS = [
 export type ReviewLanePromptId = (typeof REVIEW_LANE_PROMPT_IDS)[number];
 
 const SHARED_PROMPT_URL = new URL("./prompts/shared.md", import.meta.url);
+const TEST_POLICY_URL = new URL("../../skills/testing/policy.md", import.meta.url);
 const LANE_PROMPT_URLS: Record<ReviewLanePromptId, URL> = {
   correctness: new URL("./prompts/lanes/correctness.md", import.meta.url),
   "pr-metadata": new URL("./prompts/lanes/pr-metadata.md", import.meta.url),
   relevance: new URL("./prompts/lanes/relevance.md", import.meta.url),
-  "security-api": new URL("./prompts/lanes/security-api.md", import.meta.url),
+  "api-safety": new URL("./prompts/lanes/api-safety.md", import.meta.url),
   tests: new URL("./prompts/lanes/tests.md", import.meta.url),
   docs: new URL("./prompts/lanes/docs.md", import.meta.url),
   architecture: new URL("./prompts/lanes/architecture.md", import.meta.url),
@@ -45,5 +46,8 @@ export function readReviewLanePrompt(laneId: string): string {
   if (!Object.hasOwn(LANE_PROMPT_URLS, laneId)) {
     throw new Error(`No PR review prompt exists for lane: ${laneId}`);
   }
-  return readFileSync(LANE_PROMPT_URLS[laneId as ReviewLanePromptId], "utf8").trim();
+  const lanePrompt = readFileSync(LANE_PROMPT_URLS[laneId as ReviewLanePromptId], "utf8").trim();
+  if (laneId !== "tests") return lanePrompt;
+  const testPolicy = readFileSync(TEST_POLICY_URL, "utf8").trim();
+  return `${lanePrompt}\n\n${testPolicy}`;
 }

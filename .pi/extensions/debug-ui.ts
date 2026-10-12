@@ -6,6 +6,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 import { Type } from "typebox";
@@ -202,9 +203,31 @@ async function closeDirectorSession(
     signal,
   );
   if (result.code !== 0) throw execError(`close debug UI session ${sessionId}`, result);
-  if (activeSession?.id === sessionId) activeSession = undefined;
-  updateStatus(ctx);
   return trimOutput(result) || `Session closed: ${sessionId}`;
+}
+
+function releaseDebugSession(ctx: ExtensionContext, sessionId: string): void {
+  if (activeSession?.id !== sessionId) return;
+  activeSession = undefined;
+  debugUiMode = false;
+  updateStatus(ctx);
+}
+
+async function closeDebugSession(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    const appRoot =
+      activeSession?.id === sessionId
+        ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
+        : await resolveAppRoot(ctx.cwd);
+    return await closeDirectorSession(pi, ctx, appRoot, sessionId, signal);
+  } finally {
+    releaseDebugSession(ctx, sessionId);
+  }
 }
 
 async function runDirectorCode(
@@ -266,7 +289,7 @@ async function startDebugSession(
         signal,
       );
   } catch (error) {
-    await closeDirectorSession(pi, ctx, appRoot, session.id, signal).catch(() => undefined);
+    await closeDebugSession(pi, ctx, session.id, signal).catch(() => undefined);
     throw error;
   }
 
@@ -370,7 +393,7 @@ function debugUiPrompt(): string {
 ${active}
 - Use debug_ui_start, debug_ui_run, debug_ui_close, and debug_ui_server_logs instead of ad hoc Playwright setup.
 - Never start the app dev server yourself; if gotoAppUrl cannot detect one, ask the user to run it.
-- For visual/UI changes while a debug session is active, live-edit in the browser with page.evaluate or locator.evaluate first. Do not edit source files unless the user explicitly says "save".
+- For visual/UI changes while a debug session is active, live-edit in the browser with page.evaluate or locator.evaluate first. Persist UI source changes only after the user explicitly says "save". Unrelated files, including PR descriptions, backend code, and tests, do not require preview approval.
 - debug_ui_run code has page, gotoAppUrl, getRef, getRefs, and resetRefs in scope.
 - When the user mentions {1}, {2}, etc., call getRef(n) first. If alive is false, say the ref is stale and ask the user to right-click it again.
 - Page errors, console errors, and 4xx/5xx network failures are reported by debug_ui_run; use debug_ui_server_logs for server-side failures.`;
@@ -381,8 +404,37 @@ function appendDebugUiPrompt(systemPrompt: string): string {
   return `${systemPrompt}\n\n${debugUiPrompt()}`;
 }
 
-function isSourceMutationTool(toolName: string): boolean {
-  return toolName === "edit" || toolName === "write" || toolName === "multi-edit";
+function mutationPaths(event: ToolCallEvent): string[] {
+  if (!["edit", "write", "multi-edit"].includes(event.toolName)) return [];
+  const input = event.input as Record<string, unknown>;
+  const files =
+    event.toolName === "multi-edit" && Array.isArray(input.files) ? input.files : [input];
+  return files.flatMap((file) => {
+    if (!file || typeof file !== "object") return [];
+    const filePath = (file as { path?: unknown }).path;
+    return typeof filePath === "string" ? [filePath] : [];
+  });
+}
+
+const NON_UI_DIRECTORIES = new Set(
+  ".pi api server test tests __tests__ __mocks__ fixtures docs tmp temp".split(" "),
+);
+const UI_DIRECTORIES = new Set(["app", "pages", "components", "ui", "views", "layouts", "styles"]);
+const UI_EXTENSIONS = new Set(
+  ".tsx .jsx .css .scss .sass .less .styl .vue .svelte .html .mdx".split(" "),
+);
+const SCRIPT_EXTENSIONS = new Set([".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"]);
+
+function isUiSourcePath(filePath: string, cwd: string, appRoot: string): boolean {
+  const relative = path.relative(appRoot, path.resolve(cwd, filePath)).toLowerCase();
+  if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`))
+    return false;
+  const directories = relative.split(path.sep).slice(0, -1);
+  if (directories.some((part) => NON_UI_DIRECTORIES.has(part))) return false;
+  if (/[._](?:test|spec)\.[cm]?[jt]sx?$/.test(relative)) return false;
+  const extension = path.extname(relative);
+  if (UI_EXTENSIONS.has(extension)) return true;
+  return SCRIPT_EXTENSIONS.has(extension) && directories.some((part) => UI_DIRECTORIES.has(part));
 }
 
 function installDebugUiHooks(pi: ExtensionAPI): void {
@@ -395,14 +447,15 @@ function installDebugUiHooks(pi: ExtensionAPI): void {
     if (!activeSession && !debugUiMode && !looksLikeDebugUiPrompt(event.prompt)) return undefined;
     return { systemPrompt: appendDebugUiPrompt(event.systemPrompt) };
   });
-  pi.on("tool_call", (event) => {
-    if (!activeSession || !isSourceMutationTool(event.toolName) || /\bsave\b/i.test(lastPrompt)) {
+  pi.on("tool_call", (event, ctx) => {
+    const session = activeSession;
+    if (!session || /\bsave\b/i.test(lastPrompt)) return undefined;
+    if (!mutationPaths(event).some((file) => isUiSourcePath(file, ctx.cwd, session.appRoot)))
       return undefined;
-    }
     return {
       block: true,
       reason:
-        "Debug UI live-edit first: apply visual/UI changes in the browser with debug_ui_run. Edit source files only after the user explicitly says save.\nExit code: 1",
+        "Debug UI live-edit first: apply visual/UI changes in the browser with debug_ui_run. Edit UI source files only after the user explicitly says save.\nExit code: 1",
     };
   });
 }
@@ -460,12 +513,7 @@ function registerCloseTool(pi: ExtensionAPI): void {
     async execute(_toolCallId, params: CloseInput, signal, _onUpdate, ctx) {
       const sessionId = params.sessionId ?? activeSession?.id;
       if (!sessionId) throw new Error("No active debug UI session to close.");
-      const appRoot =
-        activeSession?.id === sessionId
-          ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
-          : await resolveAppRoot(ctx.cwd);
-      const output = await closeDirectorSession(pi, ctx, appRoot, sessionId, signal);
-      debugUiMode = false;
+      const output = await closeDebugSession(pi, ctx, sessionId, signal);
       return { content: [{ type: "text" as const, text: output }], details: { sessionId } };
     },
   });
@@ -508,12 +556,7 @@ async function handleCloseCommand(
     ctx.ui.notify("No active debug UI session to close.", "warning");
     return true;
   }
-  const appRoot =
-    activeSession?.id === sessionId
-      ? await allowedAppRoot(ctx.cwd, activeSession.appRoot)
-      : await resolveAppRoot(ctx.cwd);
-  await closeDirectorSession(pi, ctx, appRoot, sessionId, ctx.signal);
-  debugUiMode = false;
+  await closeDebugSession(pi, ctx, sessionId, ctx.signal);
   ctx.ui.notify(`Closed debug UI session ${sessionId}.`, "info");
   return true;
 }
@@ -571,8 +614,6 @@ function registerDebugUiCommand(pi: ExtensionAPI): void {
         if (await handleKillCommand(pi, ctx, command)) return;
         await handleOpenCommand(pi, ctx, command);
       } catch (error) {
-        activeSession = undefined;
-        updateStatus(ctx);
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
     },

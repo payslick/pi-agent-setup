@@ -74,7 +74,11 @@ export class VimMotionEditor extends CustomEditor {
 
   override handleInput(data: string): void {
     if (this.handlePrefixInput(data)) return;
-
+    if (matchesKey(data, "alt+down")) {
+      this.resetToInsert();
+      this.actionHandlers.get("app.message.followUp")?.();
+      return;
+    }
     if (matchesKey(data, "escape")) {
       this.handleEscape(data);
       return;

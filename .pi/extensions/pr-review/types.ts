@@ -12,7 +12,7 @@ export type ReviewLaneId =
   | "correctness"
   | "pr-metadata"
   | "relevance"
-  | "security-api"
+  | "api-safety"
   | "tests"
   | "docs"
   | "architecture"
@@ -128,7 +128,14 @@ export interface OmittedLaneReason {
   reason: string;
 }
 
-export type ReviewCoverageStatus = "covered" | "partial" | "skipped" | "missing" | "not-applicable";
+export type ReviewCoverageStatus =
+  | "covered"
+  | "complete"
+  | "failed"
+  | "partial"
+  | "skipped"
+  | "missing"
+  | "not-applicable";
 
 export interface ReviewCoverageItem {
   id: string;

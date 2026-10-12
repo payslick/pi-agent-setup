@@ -259,7 +259,7 @@ function formatReviewAfterCommentLocation(comment) {
 
 function inferCommentTheme(body) {
   if (/(auth|permission|security|secret|pii|scope|tenant|validate|saniti[sz]e)/i.test(body)) {
-    return "Security/API safety";
+    return "API safety";
   }
   if (/(test|coverage|spec|regression|e2e|unit)/i.test(body)) return "Test coverage";
   if (/(schema|drizzle|db|migration|type|zod|null|optional)/i.test(body)) {
@@ -355,7 +355,7 @@ export function inferLaneImprovementsFromPolicyHints(policyHints, options = {}) 
       )
     ) {
       addSuggestion(
-        "security-api",
+        "api-safety",
         hint,
         "Add a mandatory lane check for boundary validation/auth scope issues and require a concrete exploit/failure scenario in findings.",
         "Policy-style security comments repeat; codifying this check will catch boundary leaks earlier.",

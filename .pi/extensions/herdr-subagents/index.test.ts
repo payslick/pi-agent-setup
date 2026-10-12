@@ -101,7 +101,7 @@ describe("piArgsForSpec", () => {
       piArgsForSpec(
         {
           skills: [".pi/skills/testing/SKILL.md"],
-          excludeTools: ["spawn_subagents", "manage_subagents"],
+          excludeTools: ["herdr_spawn_agents", "herdr_manage_agents"],
         },
         "/repo",
       ),
@@ -109,7 +109,7 @@ describe("piArgsForSpec", () => {
       "--model",
       "openai-codex/gpt-5.6-sol",
       "--exclude-tools",
-      "spawn_subagents,manage_subagents",
+      "herdr_spawn_agents,herdr_manage_agents",
       "--no-skills",
       "--skill",
       path.resolve("/repo", ".pi/skills/testing/SKILL.md"),
@@ -240,7 +240,7 @@ describe("question forwarding", () => {
       "Inspected files",
     );
     expect(text).toContain('Herdr tab "BE-create-schemas"');
-    expect(text).toContain('manage_subagents action="prompt"');
+    expect(text).toContain('herdr_manage_agents action="prompt"');
   });
 });
 
@@ -299,9 +299,11 @@ describe("completion summaries", () => {
           "## Handoff\n- Summary: Added schemas.\n- Changed files: schema.ts\n- Validation: passed\n- Deviations: none\n- Risks: none\n- Follow-up: none",
         status: "success",
         runtimeMs: 65_000,
+        handoffPath: "/repo/.pi/runs/herdr/main/task/attempts/1/handoff.json",
       },
     );
     expect(text).toContain("✅ Added schemas.");
+    expect(text).toContain("Durable handoff: /repo/.pi/runs/herdr/main/task/attempts/1/handoff.json");
     expect(text).toContain("Handoff:\n## Handoff");
   });
 });

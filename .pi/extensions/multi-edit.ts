@@ -33,6 +33,8 @@ import {
   POST_EDIT_VALIDATION_REQUEST_EVENT,
   type PostEditValidationRequest,
 } from "./post-edit-validation/events";
+import type { EditedFileRanges } from "./post-edit-validation/contracts";
+import { parseMultiEditKey } from "./multi-edit/input";
 
 const TOOL_NAME = "multi-edit";
 const DISABLED_TOOL_NAME = "edit";
@@ -41,32 +43,19 @@ const COLLAPSED_BLOCK_LINES = 2;
 export const CONSECUTIVE_EDIT_REMINDER =
   "Reminder: this was a consecutive edit call. Plan related replacements together and combine them into as few multi-edit tool calls as possible.";
 
-const editSchema = Type.Object({
-  oldText: Type.String({
-    description:
-      "Exact text to replace. Must match exactly one non-overlapping region in the original file.",
-  }),
-  newText: Type.String({ description: "Replacement text." }),
-});
-
-const fileSchema = Type.Object({
-  path: Type.String({ description: "Path to edit, relative to the project root." }),
-  edits: Type.Array(editSchema, {
-    minItems: 1,
-    description:
-      "Exact text replacements for this file. Each oldText must match a unique, non-overlapping region in the original file.",
-  }),
-});
-
-const multiEditSchema = Type.Object({
-  files: Type.Array(fileSchema, {
-    minItems: 1,
-    description:
-      "Files to edit. Use one entry per file; repeated paths are merged before validation.",
-  }),
+const multiEditSchema = Type.Record(Type.String(), Type.String(), {
+  minProperties: 1,
+  description:
+    'Map file keys to text: { "path:start-end": "replacement", "path:start-": "replacement through EOF", "new-path": "full contents" }. Line numbers are 1-based, inclusive, and refer to the original file. Bare paths create missing or empty files only.',
 });
 
 export type MultiEditInput = Static<typeof multiEditSchema>;
+interface LineEdit {
+  startLine: number;
+  endLine: number | null;
+  newText: string;
+}
+type FileInput = { path: string; edits: LineEdit[] } | { path: string; create: string };
 
 export interface MultiEditLineCount {
   path: string;
@@ -79,10 +68,7 @@ interface MultiEditDiff {
   diff: string;
 }
 
-interface MultiEditEditRanges {
-  path: string;
-  ranges: Array<{ startLine: number; endLine: number }>;
-}
+type MultiEditEditRanges = EditedFileRanges;
 
 interface MultiEditDetails {
   changedFiles: string[];
@@ -98,10 +84,15 @@ interface AppliedMultiEdit {
 }
 
 interface Replacement {
-  oldText: string;
   newText: string;
   start: number;
   end: number;
+}
+
+interface SourceLine {
+  start: number;
+  end: number;
+  ending: string;
 }
 
 async function resolveEditablePath(
@@ -115,17 +106,35 @@ async function resolveEditablePath(
   return absolutePath;
 }
 
-function countOccurrences(text: string, needle: string): number[] {
-  const positions: number[] = [];
-  if (!needle) return positions;
-  let cursor = 0;
-  while (cursor <= text.length) {
-    const index = text.indexOf(needle, cursor);
-    if (index === -1) break;
-    positions.push(index);
-    cursor = index + Math.max(1, needle.length);
+function sourceLineRanges(text: string): SourceLine[] {
+  const lines: SourceLine[] = [];
+  let start = 0;
+  for (const match of text.matchAll(/\r\n|\r|\n/g)) {
+    const end = match.index + match[0].length;
+    lines.push({ start, end, ending: match[0] });
+    start = end;
   }
-  return positions;
+  if (start < text.length) lines.push({ start, end: text.length, ending: "" });
+  return lines;
+}
+
+function lineReplacement(
+  filePath: string,
+  lines: readonly SourceLine[],
+  edit: LineEdit,
+): Replacement {
+  const endLine = edit.endLine ?? lines.length;
+  if (edit.startLine > endLine || endLine > lines.length) {
+    throw new Error(
+      `Invalid line range ${edit.startLine}–${endLine} for ${filePath}; use inclusive lines 1–${lines.length}, or a bare path for an empty file.`,
+    );
+  }
+  const first = lines[edit.startLine - 1]!;
+  const last = lines[endLine - 1]!;
+  const newline = lines[0]?.ending || "\n";
+  let newText = edit.newText.replace(/\r\n|\r|\n/g, newline);
+  if (newText && !/[\r\n]$/.test(newText)) newText += last.ending;
+  return { start: first.start, end: last.end, newText };
 }
 
 function assertNoOverlaps(filePath: string, replacements: readonly Replacement[]): void {
@@ -149,14 +158,22 @@ function applyReplacements(original: string, replacements: readonly Replacement[
   return output;
 }
 
-export function mergeFileInputs(
-  files: readonly MultiEditInput["files"][number][],
-): MultiEditInput["files"] {
-  const byPath = new Map<string, MultiEditInput["files"][number]>();
+export function mergeFileInputs(files: readonly FileInput[]): FileInput[] {
+  const byPath = new Map<string, FileInput>();
   for (const file of files) {
     const existing = byPath.get(file.path);
-    if (existing) existing.edits.push(...file.edits);
-    else byPath.set(file.path, { path: file.path, edits: [...file.edits] });
+    if (
+      ("create" in file && "edits" in file) ||
+      (existing && ("create" in existing || "create" in file))
+    ) {
+      throw new Error(`Cannot combine create with other operations for ${file.path}.`);
+    }
+    if (existing && "edits" in existing && "edits" in file) existing.edits.push(...file.edits);
+    else
+      byPath.set(
+        file.path,
+        "create" in file ? { ...file } : { path: file.path, edits: [...file.edits] },
+      );
   }
   return [...byPath.values()];
 }
@@ -165,30 +182,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function normalizeRenderableFiles(input: unknown): MultiEditInput["files"] {
-  if (!isRecord(input) || !Array.isArray(input.files)) return [];
+function fileInput(key: string, newText: string): FileInput {
+  const { path: filePath, range } = parseMultiEditKey(key);
+  if (range) return { path: filePath, edits: [{ ...range, newText }] };
+  return { path: filePath, create: newText };
+}
 
-  const files: MultiEditInput["files"] = [];
-  for (const candidateFile of input.files) {
-    if (!isRecord(candidateFile)) continue;
-
-    const edits: MultiEditInput["files"][number]["edits"] = [];
-    if (Array.isArray(candidateFile.edits)) {
-      for (const candidateEdit of candidateFile.edits) {
-        if (!isRecord(candidateEdit)) continue;
-        edits.push({
-          oldText: typeof candidateEdit.oldText === "string" ? candidateEdit.oldText : "",
-          newText: typeof candidateEdit.newText === "string" ? candidateEdit.newText : "",
-        });
-      }
-    }
-
-    files.push({
-      path: typeof candidateFile.path === "string" ? candidateFile.path : "",
-      edits,
-    });
+function parseFileInputs(input: unknown): FileInput[] {
+  if (
+    !isRecord(input) ||
+    Array.isArray(input) ||
+    Object.keys(input).length === 0 ||
+    !Object.values(input).every((value) => typeof value === "string")
+  ) {
+    throw new Error("multi-edit expects a non-empty map of file keys to strings.");
   }
-  return files;
+  return Object.entries(input).map(([key, value]) => fileInput(key, value as string));
+}
+
+function normalizeRenderableFiles(input: unknown): FileInput[] {
+  if (!isRecord(input) || Array.isArray(input)) return [];
+  return Object.entries(input).flatMap(([key, value]) => {
+    if (typeof value !== "string") return [];
+    try {
+      return [fileInput(key, value)];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function sourceLines(text: string): string[] {
@@ -357,6 +378,12 @@ function formatLineRange(range: { startLine: number; endLine: number }): string 
     : `lines ${range.startLine}–${range.endLine}`;
 }
 
+function formatInputRange(creating: boolean, range: LineEdit): string {
+  if (creating) return "create";
+  if (range.endLine === null) return `lines ${range.startLine}–EOF`;
+  return formatLineRange({ startLine: range.startLine, endLine: range.endLine });
+}
+
 function renderMultiEditInputLines(
   input: unknown,
   expanded: boolean,
@@ -364,7 +391,7 @@ function renderMultiEditInputLines(
   width: number,
   editRanges: readonly MultiEditEditRanges[] = [],
 ): string[] {
-  const files = mergeFileInputs(normalizeRenderableFiles(input));
+  const files = normalizeRenderableFiles(input);
   const rangesByPath = new Map(editRanges.map((entry) => [entry.path, entry.ranges]));
   const output = [
     `${theme.fg("toolTitle", theme.bold(TOOL_NAME))} ${theme.fg(
@@ -375,15 +402,19 @@ function renderMultiEditInputLines(
 
   for (const file of files) {
     output.push("", theme.fg("toolOutput", file.path));
+    const creating = "create" in file;
+    const edits = creating ? [{ startLine: 1, endLine: 1, newText: file.create }] : file.edits;
     const fileRanges = rangesByPath.get(file.path) ?? [];
-    for (const [index, edit] of file.edits.entries()) {
-      const range = fileRanges[index];
-      if (range) output.push(theme.fg("muted", formatLineRange(range)));
-      const changedLines = parseChangedLines(changedOnlyDiff(edit.oldText, edit.newText));
+    for (const edit of edits) {
+      const resolvedRange = fileRanges.find((range) => range.startLine === edit.startLine);
+      const range = { ...edit, ...resolvedRange };
+      const label = formatInputRange(creating, range);
+      if (label) output.push(theme.fg("muted", label));
+      const changedLines = parseChangedLines(changedOnlyDiff("", edit.newText));
       if (changedLines.length) {
         output.push(...renderChangedLines(changedLines, file.path, expanded, theme, width, false));
       } else {
-        output.push(theme.fg("muted", "(no changes)"));
+        output.push(theme.fg("muted", creating ? "(empty file)" : "(delete lines)"));
       }
     }
   }
@@ -498,6 +529,18 @@ export function renderLineCounts(lineCounts: readonly MultiEditLineCount[], them
     .join("\n");
 }
 
+async function readOriginalFile(
+  absolutePath: string,
+  allowMissing: boolean,
+): Promise<string | null> {
+  try {
+    return await readFile(absolutePath, "utf8");
+  } catch (error) {
+    if (allowMissing && isRecord(error) && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 async function applyMultiEdit(
   root: string,
   projectRoot: string,
@@ -507,41 +550,37 @@ async function applyMultiEdit(
   const changedFiles: string[] = [];
   const originals: AppliedMultiEdit["originals"] = [];
   const editRanges: MultiEditEditRanges[] = [];
-  for (const file of mergeFileInputs(input.files)) {
+  for (const file of mergeFileInputs(parseFileInputs(input))) {
     const absolutePath = await resolveEditablePath(root, projectRoot, file.path, mode);
-    const original = await readFile(absolutePath, "utf8");
-    const replacements: Replacement[] = [];
-    const ranges: MultiEditEditRanges["ranges"] = [];
-    for (const edit of file.edits) {
-      if (!edit.oldText) throw new Error(`oldText cannot be empty for ${file.path}.`);
-      const matches = countOccurrences(original, edit.oldText);
-      if (matches.length !== 1) {
-        throw new Error(
-          `oldText for ${file.path} must match exactly once; found ${matches.length}. Use a more specific replacement.`,
-        );
-      }
-      const start = matches[0]!;
-      const startLine = original.slice(0, start).split("\n").length;
-      ranges.push({
+    const original = await readOriginalFile(absolutePath, "create" in file);
+    let updated: string;
+    let ranges: MultiEditEditRanges["ranges"];
+    if ("create" in file) {
+      if (original)
+        throw new Error(`Cannot create non-empty file ${file.path}; use line-range edits.`);
+      updated = file.create;
+      const lineCount = sourceLines(updated).length;
+      ranges = lineCount ? [{ startLine: 1, endLine: lineCount }] : [];
+    } else {
+      const lines = sourceLineRanges(original ?? "");
+      const replacements = file.edits.map((edit) => lineReplacement(file.path, lines, edit));
+      assertNoOverlaps(file.path, replacements);
+      updated = applyReplacements(original ?? "", replacements);
+      ranges = file.edits.map(({ startLine, endLine }) => ({
         startLine,
-        endLine: startLine + Math.max(1, sourceLines(edit.oldText).length) - 1,
-      });
-      replacements.push({
-        oldText: edit.oldText,
-        newText: edit.newText,
-        start,
-        end: start + edit.oldText.length,
-      });
+        endLine: endLine ?? lines.length,
+      }));
     }
 
-    assertNoOverlaps(file.path, replacements);
     editRanges.push({ path: file.path, ranges });
-    const updated = applyReplacements(original, replacements);
     if (updated !== original) {
       await mkdir(path.dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, updated, "utf8");
+      await writeFile(absolutePath, updated, {
+        encoding: "utf8",
+        flag: original === null ? "wx" : "w",
+      });
       changedFiles.push(file.path);
-      originals.push({ path: file.path, content: original });
+      originals.push({ path: file.path, content: original ?? "" });
     }
   }
   return { changedFiles, originals, editRanges };
@@ -580,6 +619,7 @@ async function awaitPostEditValidation(
   pi.events.emit(POST_EDIT_VALIDATION_REQUEST_EVENT, {
     toolCallId,
     affectedPaths: details.changedFiles,
+    editRanges: details.editRanges.filter((edit) => details.changedFiles.includes(edit.path)),
     ctx,
     waitFor(validation) {
       validations.push(validation);
@@ -592,11 +632,13 @@ function registerMultiEditTool(pi: ExtensionAPI): void {
   pi.registerTool<typeof multiEditSchema, MultiEditDetails>({
     name: TOOL_NAME,
     label: "Multi Edit",
-    description: "Edit any number of files using exact text replacements.",
-    promptSnippet: "Edit any number of files using exact text replacements.",
+    description:
+      "Edit or create files with a flat map of path:start-end, path:start-, or bare path keys to text.",
+    promptSnippet: "Edit or create files with a flat map of file/range keys to text.",
     promptGuidelines: [
       "Use multi-edit for every edit; the built-in edit tool is disabled.",
-      "For multi-edit, each oldText must match a unique, non-overlapping region in the original file content.",
+      'Read files first. Pass a flat object: { "file:10-12": "replacement", "file:20-": "new tail", "new-file": "contents" }. No files wrapper or oldText. Ranges are 1-based, inclusive, non-overlapping, and refer to the original file. An omitted end means EOF. The final colon separates the path from the range.',
+      "Empty replacement text deletes the selected lines; otherwise the file's newline style and selected trailing newline are preserved. Bare file keys create missing or empty files (including parent directories), reject non-empty files, and cannot be combined with range edits for the same path.",
     ],
     parameters: multiEditSchema,
     executionMode: "sequential",
@@ -609,7 +651,12 @@ function registerMultiEditTool(pi: ExtensionAPI): void {
       await awaitPostEditValidation(
         pi,
         toolCallId,
-        { changedFiles: applied.changedFiles, lineCounts: [], diffs: [], editRanges: [] },
+        {
+          changedFiles: applied.changedFiles,
+          lineCounts: [],
+          diffs: [],
+          editRanges: applied.editRanges,
+        },
         ctx,
       );
       const details = await finalizeMultiEdit(ctx.cwd, projectRoot, applied, mode);

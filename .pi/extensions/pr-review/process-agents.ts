@@ -298,7 +298,7 @@ const inferAnalysisCategory = (body: string): PostReviewCategory =>
 
 const fallbackTheme = (body: string): string =>
   /(auth|permission|security|tenant|pii|validation)/i.test(body)
-    ? "Security/API safety"
+    ? "API safety"
     : /(test|coverage|regression|spec)/i.test(body)
       ? "Test coverage"
       : /(schema|database|db|type|null|migration)/i.test(body)

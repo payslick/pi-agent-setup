@@ -70,6 +70,21 @@ describe("implementation assignments", () => {
     ).toThrow("app/src/shared.ts is already owned by one.");
   });
 
+  test("does not let completed or failed attempts retain writer slots or file ownership", () => {
+    const inactive = [
+      { ...activeRecord("failed", ["app/src/shared.ts"]), lifecycleStatus: "failed" as const },
+      { ...activeRecord("missing", ["app/src/other.ts"]), lifecycleStatus: "missing" as const },
+    ];
+
+    expect(() =>
+      validateImplementationAssignments(
+        [implementationSpec("replacement", ["app/src/shared.ts"])],
+        inactive,
+        "/repo",
+      ),
+    ).not.toThrow();
+  });
+
   test("limits implementation concurrency", () => {
     expect(() =>
       validateImplementationAssignments(
@@ -117,19 +132,21 @@ describe("implementation assignments", () => {
     ).toThrow("Unknown subagent profile: unknown.");
   });
 
-  test("treats unit and E2E test specialists as implementation workers", () => {
-    const specs: SubagentSpec[] = [
-      {
-        ...implementationSpec("unit", ["app/tests/unit/example.test.ts"]),
-        profile: "unit-test-implementer",
-      },
-      {
-        ...implementationSpec("e2e", ["app/tests/e2e/example.test.ts"]),
-        profile: "e2e-test-implementer",
-      },
-    ];
-
-    expect(() => validateImplementationAssignments(specs, [], "/repo")).not.toThrow();
+  test("treats product, database, builder, unit, and E2E specialists as implementation workers", () => {
+    for (const profile of [
+      "frontend-implementer",
+      "backend-implementer",
+      "database-implementer",
+      "builder-implementer",
+      "unit-test-implementer",
+      "e2e-test-implementer",
+    ] as const) {
+      const spec: SubagentSpec = {
+        ...implementationSpec(profile, [`app/src/${profile}.ts`]),
+        profile,
+      };
+      expect(() => validateImplementationAssignments([spec], [], "/repo")).not.toThrow();
+    }
   });
 
   test("requires read-only reviewers to have an empty write scope", () => {
